@@ -1,0 +1,8 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Backup ARCHIVES are data, never code. Never commit a tarball of secrets.
+*.tar.gz
+*.tgz
+*.zip
