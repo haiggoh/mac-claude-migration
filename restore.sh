@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
 # restore.sh — rebuild the Claude Code setup on the NEW Mac from an archive
-#              produced by backup.sh. Assumes the same username (bra0002h),
-#              so all absolute-path symlinks resolve unchanged.
+#              produced by backup.sh. Works across different usernames: the
+#              source user/home are recorded in meta.env, and absolute-path
+#              symlinks pointing into the source home are rewritten to $HOME.
 #
 # Order matters:
 #   1. Homebrew toolchain (git, uv, node, ffmpeg, yt-dlp, gh, python, pipx…)
 #   2. Restore packaged state into $HOME (existing files backed up first)
 #   3. Clone git repos → checkout recorded SHA → apply uncommitted overlay
-#   4. Recreate virtualenvs / node_modules (uv sync, npm install)
-#   5. pipx tools
+#   4. Recreate virtualenvs / node_modules for the recorded repos (uv sync, npm install)
+#   5. pipx tools (every package recorded in pipx-list.txt)
 #   6. Claude Code binary + plugins (fresh install; plugins re-fetch from manifest)
 #   7. Print remaining manual steps (joyia, re-auth)
 #
@@ -22,7 +23,7 @@ set -euo pipefail
 # "archive not found: --help" and exited 0, so a failed probe looked like a
 # successful one.
 usage() {
-  sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR==1 {next} !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"
   printf 'Options:\n  -h, --help   show this help and exit\n'
 }
 ARGS=()
@@ -56,6 +57,22 @@ log "Unpacking archive → $TMP"
 tar xzf "$ARCHIVE" -C "$TMP"
 STAGE="$TMP"                      # backup.sh tarred the stage dir contents at root
 [ -d "$STAGE/home" ] || { echo "malformed archive: no home/ dir" >&2; exit 1; }
+
+# The source machine's user/home (meta.env is written by backup.sh). Symlinks that
+# point INTO the source home would dangle when the usernames differ — rewrite them
+# to the new $HOME. Anything pointing elsewhere (e.g. a workspace outside $HOME) is
+# left as-is and reported.
+SOURCE_HOME="$(sed -n 's/^SOURCE_HOME=//p' "$STAGE/meta.env" 2>/dev/null || true)"
+if [ -n "$SOURCE_HOME" ] && [ "$SOURCE_HOME" != "$HOME" ]; then
+  n=0
+  while IFS= read -r -d '' l; do
+    t="$(readlink "$l")" || continue
+    case "$t" in "$SOURCE_HOME"/*)
+      ln -sfn "$HOME${t#"$SOURCE_HOME"}" "$l" && n=$((n+1));;
+    esac
+  done < <(find "$STAGE/home" -type l -print0)
+  [ "$n" -gt 0 ] && log "rewrote $n symlink(s) from source home $SOURCE_HOME to $HOME"
+fi
 
 ########################################################################
 log "1/7  Homebrew toolchain"
@@ -122,29 +139,39 @@ fi
 ########################################################################
 log "4/7  Recreate virtualenvs & node_modules"
 ########################################################################
-if command -v uv >/dev/null 2>&1; then
-  for r in "$HOME/ClaudeWorkspace/video-use" "$HOME/mcp-servers/adobe-mcp"; do
-    if [ -f "$r/uv.lock" ] || [ -f "$r/pyproject.toml" ]; then
-      log "uv sync → $r"; ( cd "$r" && uv sync ) || warn "uv sync failed in $r"
-    fi
-  done
+# For EVERY repo recorded in repos.tsv (not a hardcoded list): uv sync when it is
+# a Python project, npm install when it carries a node subdir.
+if command -v uv >/dev/null 2>&1 || command -v npm >/dev/null 2>&1; then
+  if [ -f "$STAGE/repos.tsv" ]; then
+    while IFS=$'\t' read -r rel _url _branch _sha; do
+      r="$HOME/$rel"
+      [ -d "$r" ] || continue
+      if command -v uv >/dev/null 2>&1 && { [ -f "$r/uv.lock" ] || [ -f "$r/pyproject.toml" ]; }; then
+        log "uv sync → $rel"; ( cd "$r" && uv sync ) || warn "uv sync failed in $rel"
+      fi
+      if command -v npm >/dev/null 2>&1 && [ -f "$r/proxy-server/package.json" ]; then
+        log "npm install → $rel/proxy-server"
+        ( cd "$r/proxy-server" && npm install ) || warn "npm install failed in $rel/proxy-server"
+      fi
+    done < "$STAGE/repos.tsv"
+  else
+    warn "no repos.tsv in archive — nothing to sync; run 'uv sync' in your Python projects by hand"
+  fi
 else
-  warn "uv not found — install via brew, then run 'uv sync' in video-use & adobe-mcp"
-fi
-# adobe-mcp proxy-server node deps
-if [ -f "$HOME/mcp-servers/adobe-mcp/proxy-server/package.json" ]; then
-  log "npm install → adobe-mcp/proxy-server"
-  ( cd "$HOME/mcp-servers/adobe-mcp/proxy-server" && npm install ) || warn "npm install failed"
+  warn "uv and npm not found — install via brew, then run 'uv sync' / 'npm install' in your projects"
 fi
 
 ########################################################################
 log "5/7  pipx tools"
 ########################################################################
 if command -v pipx >/dev/null 2>&1 && [ -f "$STAGE/pipx-list.txt" ]; then
-  # your setup had: litellm
-  grep -qi litellm "$STAGE/pipx-list.txt" && { pipx install litellm || warn "pipx litellm failed"; }
+  # Reinstall EVERY package the old machine had (first field = name).
+  while IFS= read -r name _ver; do
+    case "$name" in ''|package) continue ;; esac
+    log "pipx install $name"; pipx install "$name" || warn "pipx install $name failed"
+  done < "$STAGE/pipx-list.txt"
 else
-  warn "pipx not found or no list — 'brew install pipx && pipx install litellm' if you need it"
+  warn "pipx not found or no list — 'brew install pipx' and reinstall your tools if you need them"
 fi
 
 ########################################################################
@@ -173,10 +200,10 @@ cat <<'STEPS'
                     repos; run `hf auth login` only for private/gated access.
   • Verify the API keys survived:   ls -l ~/.api_keys/   (a DIRECTORY, mode 700,
                     one bare-value secret per file at mode 600). ~/.zshrc turns each
-                    filename into an env var (elevenlabs -> ELEVENLABS_API_KEY), so in
-                    a NEW terminal: echo ${ELEVENLABS_API_KEY:+set}  ->  should print "set".
-                    Do NOT expect ~/.zshrc to `source` these files — they hold a raw
-                    secret, not shell syntax.
+                    filename into an env var (uppercased: `groq` -> GROQ_API_KEY), so in
+                    a NEW terminal, pick one and check:  echo ${SOME_API_KEY:+set}
+                    -> should print "set". Do NOT expect ~/.zshrc to `source` these
+                    files — they hold a raw secret, not shell syntax.
   • Open a new terminal so ~/.zshrc is sourced, then launch `claude`.
 STEPS
 

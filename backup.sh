@@ -15,6 +15,16 @@
 #         ⚠️ Contains secrets (SSH keys, API keys, gh token). Transfer over
 #            AirDrop / USB / encrypted channel — never email or cloud paste.
 #
+# Per-machine configuration (this script is machine-agnostic; configure yours):
+#   MIGRATION_REPOS="projects/foo:servers/bar"   git repos to record
+#       (remote + exact SHA + uncommitted overlay), colon-separated, relative
+#       to $HOME — or one per line in ~/.claude-migration-repos
+#   MIGRATION_EXTRA_FILES="projects/notes.md"        extra files to capture,
+#       same syntax — or one per line in ~/.claude-migration-extra-files
+#   Unset = no repos/extra files recorded (warned below): a fresh machine decides
+#   what to carry. The source user/home are recorded in meta.env so restore.sh
+#   can rewrite absolute-path symlinks on a machine with a different username.
+#
 # Usage: bash backup.sh            # writes into ~/claude-migration
 #        bash backup.sh /some/dir  # writes into /some/dir
 #
@@ -24,7 +34,9 @@ set -euo pipefail
 # A user probing an unfamiliar script with --help expects to be told something,
 # not to trigger a backup that writes a tarball full of secrets.
 usage() {
-  sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+  # print the whole header comment block, whatever its length (a fixed range once hid
+  # every line added past it — measured on rtc-ship 0.6.11)
+  awk 'NR==1 {next} !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"
   printf 'Options:\n  -h, --help   show this help and exit\n  --dry-run    print what would be captured, then exit without writing\n'
 }
 DRY_RUN=0
@@ -51,6 +63,29 @@ STAGE="$OUT/stage-$STAMP"
 HOMEDIR="$STAGE/home"          # mirrors a subset of $HOME
 ARCHIVE="$OUT/claude-migration-$STAMP.tar.gz"
 
+log() { printf '\033[1;34m▶ %s\033[0m\n' "$*"; }
+warn(){ printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
+
+# Per-machine configuration, parsed BEFORE the dry-run exit so --dry-run shows the
+# warning too (header documents the env vars / config files).
+#   MIGRATION_REPOS / ~/.claude-migration-repos        git repos to record
+#   MIGRATION_EXTRA_FILES / ~/.claude-migration-extra-files   extra files to capture
+REPOS=()
+if [ -n "${MIGRATION_REPOS:-}" ]; then
+  IFS=: read -ra REPOS <<< "$MIGRATION_REPOS"
+elif [ -f "$SRC/.claude-migration-repos" ]; then
+  while IFS= read -r r; do case "$r" in ''|'#'*) continue ;; esac; REPOS+=("$r"); done \
+    < "$SRC/.claude-migration-repos"
+fi
+[ "${#REPOS[@]}" -eq 0 ] && warn "no repos configured (MIGRATION_REPOS / ~/.claude-migration-repos) — recording none"
+EXTRA_FILES=()
+if [ -n "${MIGRATION_EXTRA_FILES:-}" ]; then
+  IFS=: read -ra EXTRA_FILES <<< "$MIGRATION_EXTRA_FILES"
+elif [ -f "$SRC/.claude-migration-extra-files" ]; then
+  while IFS= read -r r; do case "$r" in ''|'#'*) continue ;; esac; EXTRA_FILES+=("$r"); done \
+    < "$SRC/.claude-migration-extra-files"
+fi
+
 if [ "$DRY_RUN" = 1 ]; then
   printf 'DRY RUN — nothing will be written.\n\n'
   printf 'Would write archive: %s\n' "$ARCHIVE"
@@ -70,9 +105,6 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 
 mkdir -p "$HOMEDIR" "$STAGE/repo-overlays"
-
-log() { printf '\033[1;34m▶ %s\033[0m\n' "$*"; }
-warn(){ printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
 
 # rsync helper: copy path (relative to $HOME) into stage, preserving structure,
 # symlinks (-a keeps them AS symlinks), and applying shared excludes.
@@ -108,9 +140,9 @@ log "1/6  Claude Code state (.claude, minus redownloadable payloads/caches)"
   --exclude='.claude/mcp-needs-auth-cache.json' \
   --exclude='.claude/stats-cache.json' \
   .claude "$HOMEDIR/" )
-# NOTE: .claude/skills/video-use is a symlink -> ClaudeWorkspace/video-use.
-# rsync -a preserves it as a symlink; it resolves on restore because the
-# username (and therefore the target path) is identical on the new Mac.
+# NOTE: symlinks inside .claude (e.g. skills linked into a workspace dir) are
+# preserved AS symlinks by rsync -a; restore.sh rewrites the ones pointing into
+# the source home to the new $HOME (source home is recorded in meta.env).
 
 ########################################################################
 log "2/6  Top-level config, project map & shell state"
@@ -125,7 +157,8 @@ copy_rel ".zshrc"
 copy_rel ".zshrc.backup"
 copy_rel ".gitconfig"
 copy_rel ".zsh_history"
-copy_rel "ClaudeWorkspace/claude-mcp-setup.md"
+# Extra per-machine files, parsed up top (MIGRATION_EXTRA_FILES / the config file).
+for f in ${EXTRA_FILES[@]+"${EXTRA_FILES[@]}"}; do copy_rel "$f"; done
 
 ########################################################################
 log "3/6  Secrets & credentials (⚠️ sensitive)"
@@ -155,13 +188,7 @@ log "4/6  Git repos → record remote + exact commit + uncommitted overlay"
 # (so you land on the same commit, not upstream HEAD), then applies an overlay
 # of your uncommitted/untracked files (respecting .gitignore, so venvs are
 # excluded automatically). This is "download from public source + zero gap".
-REPOS=(
-  "ClaudeWorkspace/measure-twice"
-  "ClaudeWorkspace/claude-code-desktop-sync"
-  "ClaudeWorkspace/video-use"
-  "ClaudeWorkspace/no-hidden-changes"
-  "mcp-servers/adobe-mcp"
-)
+# Repos were configured up top (MIGRATION_REPOS / ~/.claude-migration-repos).
 : > "$STAGE/repos.tsv"   # path<TAB>url<TAB>branch<TAB>sha
 for rel in "${REPOS[@]}"; do
   d="$SRC/$rel"
@@ -204,11 +231,17 @@ fi
 ########################################################################
 log "6/6  Write MANIFEST.md and pack the archive"
 ########################################################################
+ROOTDIR="$(cd "$(dirname "$0")" && pwd)"
+printf 'SOURCE_USER=%s\nSOURCE_HOME=%s\nTOOL_VERSION=%s\n' \
+  "$(id -un)" "$SRC" "$(tr -d '[:space:]' < "$ROOTDIR/VERSION" 2>/dev/null || echo dev)" \
+  > "$STAGE/meta.env"
 cat > "$STAGE/MANIFEST.md" <<'MD'
 # Claude Code migration archive
 
-Generated by backup.sh. Restore with `restore.sh` on the new Mac (same username
-`bra0002h` assumed). Contains local-only STATE; public payloads are reinstalled.
+Generated by backup.sh. Restore with `restore.sh` on the new Mac. The source
+user/home are in `meta.env`; restore.sh rewrites absolute-path symlinks that
+point into the source home to the new $HOME. Contains local-only STATE; public
+payloads are reinstalled.
 
 ## What's inside (packaged state)
 - `home/.claude/`          — settings, memory, session transcripts, plans, tasks,
@@ -233,10 +266,10 @@ Generated by backup.sh. Restore with `restore.sh` on the new Mac (same username
 - Homebrew formulae/casks (from Brewfile) incl. ffmpeg, yt-dlp, uv, node, gh, python.
 - Claude Code binary (fresh install; version pin in claude-version.txt).
 - Claude plugins + marketplaces (payloads re-fetched from manifest).
-- Git repos (clone + checkout recorded SHA + overlay): measure-twice,
-  claude-code-desktop-sync, video-use, no-hidden-changes, adobe-mcp.
-- Virtualenvs (uv sync) and node_modules (npm install) for video-use & adobe-mcp.
-- pipx tools (litellm).
+- Git repos (clone + checkout recorded SHA + overlay): the paths in `repos.tsv`
+  (configured per machine via MIGRATION_REPOS / ~/.claude-migration-repos).
+- Virtualenvs (uv sync) and node_modules (npm install) for the recorded repos.
+- pipx tools (from pipx-list.txt).
 
 ## Manual re-auth after restore (credentials that live in a keychain/token, not files)
 - `gh auth login`         (if the copied gh config isn't accepted)

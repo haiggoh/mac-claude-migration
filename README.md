@@ -51,11 +51,28 @@ fail if the docs drift back.
 Both suites were **mutation-tested**: run against the pre-fix scripts they report
 9 failures. A suite that cannot fail proves nothing, so that check is the point.
 
+## Configure what gets captured (per machine)
+
+The repo list and extra files are **not** hardcoded. On the source Mac, either:
+
+```sh
+export MIGRATION_REPOS="projects/my-app:servers/my-mcp"   # colon-separated, relative to $HOME
+export MIGRATION_EXTRA_FILES="projects/notes.md"          # extra files to capture
+bash backup.sh
+```
+
+or put one path per line in `~/.claude-migration-repos` and
+`~/.claude-migration-extra-files` (`#` comments ok). Unset = nothing recorded (the
+backup warns). The source user/home are stored in the archive's `meta.env`, and
+`restore.sh` rewrites absolute-path symlinks that pointed into the source home to
+the new `$HOME` — so the username may differ between the machines.
+
 ## Requirements & assumptions
 
 `bash` (3.2-compatible — the `/bin/bash` macOS ships), `rsync`, `git`, `tar`.
-Restore assumes the **same username** on both machines, so absolute-path symlinks
-resolve unchanged; the code itself uses `$HOME` throughout.
+The scripts use `$HOME` throughout and carry no machine-specific paths; the
+username may differ between source and target Macs (see above). Restore needs
+Homebrew (`brew bundle` leg); without it the script says so and continues.
 
 ## License
 
