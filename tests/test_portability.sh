@@ -47,13 +47,28 @@ fi
 # 5. MIGRATION_REPOS is honoured (dry-run lists the configured repo as present-or-absent, not skipped silently)
 SENT2=$(mktemp -d); rm -rf "$SENT2"
 out=$(env MIGRATION_REPOS="some/repo:other/repo" HOME="$SENT2" "$ROOT/backup.sh" --dry-run 2>&1)
-printf '%s' "$out" | grep -q 'some/repo' || printf '%s' "$out" | grep -q 'no repos configured'
 # (repos.tsv content is only visible in a real run; here we assert the warning is GONE when configured)
 if printf '%s' "$out" | grep -qi 'no repos configured'; then
   bad "MIGRATION_REPOS honoured" "warning still printed with the env var set"
 else
   ok "MIGRATION_REPOS honoured (no empty-list warning when set)"
 fi
+TMPREAL="$HERE/.tmp-real-run.log"
+trap 'rm -rf "$SENT2" "$TMPREAL"' EXIT
+
+# 6. a REAL (non-dry) run under /bin/bash 3.2 with an empty config must survive the
+#    empty REPOS array (set -u + bash 3.2 used to crash here: "REPOS[@]: unbound
+#    variable") and still produce an archive
+FAKEHOME=$(mktemp -d); OUT=$(mktemp -d); rm -rf "$FAKEHOME" "$OUT"
+mkdir -p "$FAKEHOME/.config"; printf '# t\n' > "$FAKEHOME/.config/test"
+if /bin/bash "$ROOT/backup.sh" "$OUT" >"$TMPREAL" 2>&1; then
+  found=0; for a in "$OUT"/claude-migration-*.tar.gz; do [ -f "$a" ] && found=1; done
+  [ "$found" = 1 ] && ok "real /bin/bash run with empty config produces an archive" \
+    || bad "real empty-config run" "no archive produced"
+else
+  bad "real empty-config run" "crashed (bash 3.2 empty-array under set -u?) — see $TMPREAL"
+fi
+rm -rf "$FAKEHOME" "$OUT"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

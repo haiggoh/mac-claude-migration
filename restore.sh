@@ -67,9 +67,11 @@ if [ -n "$SOURCE_HOME" ] && [ "$SOURCE_HOME" != "$HOME" ]; then
   n=0
   while IFS= read -r -d '' l; do
     t="$(readlink "$l")" || continue
-    case "$t" in "$SOURCE_HOME"/*)
-      ln -sfn "$HOME${t#"$SOURCE_HOME"}" "$l" && n=$((n+1));;
-    esac
+    # literal prefix test, NOT a case/glob pattern — a source home containing glob
+    # characters ([, ], *) would misbehave in a case pattern
+    if [ "${t#"$SOURCE_HOME"/}" != "$t" ]; then
+      ln -sfn "$HOME/${t#"$SOURCE_HOME"/}" "$l" && n=$((n+1))
+    fi
   done < <(find "$STAGE/home" -type l -print0)
   [ "$n" -gt 0 ] && log "rewrote $n symlink(s) from source home $SOURCE_HOME to $HOME"
 fi

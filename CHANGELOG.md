@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.1.1] — 2026-10-31 — post-release council review fixes
+
+- **Fixed:** a real `backup.sh` run with NO repos configured crashed under `/bin/bash`
+  3.2 (`set -u` + empty `REPOS` array: "REPOS[@]: unbound variable") — found by the
+  cross-family council review after 0.1.0 shipped; the 0.1.0 portability test only
+  exercised `--dry-run`, which exits before that loop. `tests/test_portability.sh` now
+  runs a real `/bin/bash` run with an empty config and asserts an archive is produced.
+- **Fixed:** the overlay `git ls-files` now emits NUL-separated paths re-expanded to
+  lines with `core.quotepath=false`, so filenames with non-ASCII or special characters
+  are no longer shell-quoted into the tar list.
+- **Fixed:** `restore.sh`'s symlink rewrite uses a literal prefix test instead of a
+  `case` glob pattern, so a source home containing glob characters (`[`, `]`, `*`)
+  cannot mis-route a rewrite.
+- **Fixed:** the `.claude` rsync leg is guarded like `copy_rel` — a machine without
+  `~/.claude` (fresh Mac) no longer crashes the backup with an rsync lstat error
+  (found by the new real-run test, not by 0.1.0's dry-run-only coverage).
+- Not changed: the installed `bin` wrapper's mode is `0555` by Homebrew's own post-install
+  (council flagged the `.write` as non-executable; verified `0555` on the installed copy).
+
 ## [0.1.0] — 2026-10-31 — first public release: machine-agnostic
 
 ### Changed

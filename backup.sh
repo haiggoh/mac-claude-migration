@@ -128,18 +128,23 @@ log "1/6  Claude Code state (.claude, minus redownloadable payloads/caches)"
 # Keep everything in .claude EXCEPT plugin payloads/caches and pure runtime junk.
 # We KEEP plugins/{installed_plugins,known_marketplaces}.json — the tiny manifest
 # that tells restore.sh which marketplaces + plugins to reinstall.
-( cd "$SRC" && rsync -aR "${COMMON_EXCLUDES[@]}" \
-  --exclude='.claude/plugins/cache/' \
-  --exclude='.claude/plugins/marketplaces/' \
-  --exclude='.claude/plugins/plugin-catalog-cache.json' \
-  --exclude='.claude/cache/' \
-  --exclude='.claude/shell-snapshots/' \
-  --exclude='.claude/daemon.lock' \
-  --exclude='.claude/daemon.log' \
-  --exclude='.claude/daemon.status.json' \
-  --exclude='.claude/mcp-needs-auth-cache.json' \
-  --exclude='.claude/stats-cache.json' \
-  .claude "$HOMEDIR/" )
+# (Guarded like copy_rel: a fresh machine without .claude must not crash here.)
+if [ -e "$SRC/.claude" ]; then
+  ( cd "$SRC" && rsync -aR "${COMMON_EXCLUDES[@]}" \
+    --exclude='.claude/plugins/cache/' \
+    --exclude='.claude/plugins/marketplaces/' \
+    --exclude='.claude/plugins/plugin-catalog-cache.json' \
+    --exclude='.claude/cache/' \
+    --exclude='.claude/shell-snapshots/' \
+    --exclude='.claude/daemon.lock' \
+    --exclude='.claude/daemon.log' \
+    --exclude='.claude/daemon.status.json' \
+    --exclude='.claude/mcp-needs-auth-cache.json' \
+    --exclude='.claude/stats-cache.json' \
+    .claude "$HOMEDIR/" )
+else
+  warn "skip (missing): .claude"
+fi
 # NOTE: symlinks inside .claude (e.g. skills linked into a workspace dir) are
 # preserved AS symlinks by rsync -a; restore.sh rewrites the ones pointing into
 # the source home to the new $HOME (source home is recorded in meta.env).
@@ -190,7 +195,9 @@ log "4/6  Git repos → record remote + exact commit + uncommitted overlay"
 # excluded automatically). This is "download from public source + zero gap".
 # Repos were configured up top (MIGRATION_REPOS / ~/.claude-migration-repos).
 : > "$STAGE/repos.tsv"   # path<TAB>url<TAB>branch<TAB>sha
-for rel in "${REPOS[@]}"; do
+# bash-3.2 + set -u: an empty REPOS array must not crash here (the ${var+...} guard
+# keeps the expansion empty instead of raising "unbound variable").
+for rel in ${REPOS[@]+"${REPOS[@]}"}; do
   d="$SRC/$rel"
   [ -d "$d/.git" ] || { warn "not a git repo, skipping repo-mode: $rel"; continue; }
   url="$(git -C "$d" remote get-url origin 2>/dev/null || echo '')"
@@ -200,7 +207,8 @@ for rel in "${REPOS[@]}"; do
   # overlay = modified + untracked, gitignore-respected (excludes .venv etc.)
   safe="$(echo "$rel" | tr '/' '__')"
   ( cd "$d"
-    git ls-files -m -o --exclude-standard \
+    git -c core.quotepath=false ls-files -z -m -o --exclude-standard \
+      | tr '\0' '\n' \
       | grep -vE '(^|/)(\.venv|venv|node_modules|__pycache__)/' \
       | grep -vE '(^|/)\.DS_Store$' > "$STAGE/repo-overlays/$safe.filelist" || true
     if [ -s "$STAGE/repo-overlays/$safe.filelist" ]; then
