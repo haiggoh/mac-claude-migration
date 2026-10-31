@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# backup.sh — capture the NON-redownloadable state of this Claude Code setup.
+# 📦 backup.sh — capture the NON-redownloadable state of this Claude Code setup.
 #
 # Philosophy (per the migration plan):
 #   • PACKAGE  = local-only state that cannot be fetched from anywhere else

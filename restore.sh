@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# restore.sh — rebuild the Claude Code setup on the NEW Mac from an archive
+# 📦 restore.sh — rebuild the Claude Code setup on the NEW Mac from an archive
 #              produced by backup.sh. Assumes the same username (bra0002h),
 #              so all absolute-path symlinks resolve unchanged.
 #

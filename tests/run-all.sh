@@ -7,5 +7,6 @@ HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 RC=0
 echo "== CLI contract (args parsed before work) =="; "$HERE/test_cli_contract.sh"   || RC=1
 echo; echo "== capture shapes (file vs directory) ==";  "$HERE/test_capture_shapes.sh" || RC=1
+echo; echo "== branding (📦 banner + h1) ==";            "$HERE/test_branding.sh"      || RC=1
 echo; [ $RC -eq 0 ] && echo "ALL SUITES PASSED" || echo "SOME SUITES FAILED"
 exit $RC

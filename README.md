@@ -1,4 +1,4 @@
-# mac-claude-migration
+# 📦 mac-claude-migration
 
 Move a whole Claude Code setup to a new Mac: **package what cannot be
 redownloaded, reinstall everything that can.**
