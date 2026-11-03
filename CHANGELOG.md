@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.1.2] — 2026-11-03 — 📦 branding lands on the public-release lineage
+
+- **Added:** the emoji-rollout Task 21 branding — 📦 leads both scripts'
+  `--help` banner and the README h1, pinned by `tests/test_branding.sh`.
+  It had shipped to `main` on 2026-10-31, but the release lineage forked
+  before it, so v0.1.0/v0.1.1 published without the marks. This release
+  reconciles the two lineages.
+- **Fixed:** `usage()`'s dynamic-awk header range printed the bare `#`
+  separator as `--help`'s first line (a merge artifact of combining the
+  branding banner with the 0.1.0 usage rewrite) — it now skips leading
+  empty comment lines so the banner is the first line again.
+
 ## [0.1.1] — 2026-10-31 — post-release council review fixes
 
 - **Fixed:** a real `backup.sh` run with NO repos configured crashed under `/bin/bash`
