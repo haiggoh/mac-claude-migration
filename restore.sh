@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# restore.sh — rebuild the Claude Code setup on the NEW Mac from an archive
+# 📦 restore.sh — rebuild the Claude Code setup on the NEW Mac from an archive
 #              produced by backup.sh. Works across different usernames: the
 #              source user/home are recorded in meta.env, and absolute-path
 #              symlinks pointing into the source home are rewritten to $HOME.
@@ -23,7 +23,7 @@ set -euo pipefail
 # "archive not found: --help" and exited 0, so a failed probe looked like a
 # successful one.
 usage() {
-  awk 'NR==1 {next} !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"
+  awk 'NR==1 {next} !/^#/ {exit} {line=$0; sub(/^# ?/, "", line); if (line == "" && !started) next; started=1; print line}' "$0"
   printf 'Options:\n  -h, --help   show this help and exit\n'
 }
 ARGS=()

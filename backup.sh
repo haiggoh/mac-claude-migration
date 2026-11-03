@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# backup.sh — capture the NON-redownloadable state of this Claude Code setup.
+# 📦 backup.sh — capture the NON-redownloadable state of this Claude Code setup.
 #
 # Philosophy (per the migration plan):
 #   • PACKAGE  = local-only state that cannot be fetched from anywhere else
@@ -36,7 +36,7 @@ set -euo pipefail
 usage() {
   # print the whole header comment block, whatever its length (a fixed range once hid
   # every line added past it — measured on rtc-ship 0.6.11)
-  awk 'NR==1 {next} !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"
+  awk 'NR==1 {next} !/^#/ {exit} {line=$0; sub(/^# ?/, "", line); if (line == "" && !started) next; started=1; print line}' "$0"
   printf 'Options:\n  -h, --help   show this help and exit\n  --dry-run    print what would be captured, then exit without writing\n'
 }
 DRY_RUN=0
