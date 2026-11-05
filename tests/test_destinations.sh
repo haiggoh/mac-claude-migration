@@ -397,5 +397,127 @@ else
 fi
 rm -rf "$FAKE"
 
+run_menu_real() {  # like run_menu but a REAL run (no --dry-run); fast — HOME is the fake
+  FAKE="$1"; shift
+  {
+    for k in "$@"; do printf '%s\n' "$k"; sleep 1.5; done
+  } | HOME="$FAKE" script -q /dev/null /bin/bash "$ROOT/backup.sh" >"$PTYOUT" 2>&1
+  RC=$?
+}
+
+# --- Task 3: multi-destination write -------------------------------------------
+
+# 24. "2 1" real run: archive BUILT in candidate 2 (primary), copied to the default;
+#     both exist, byte sizes equal, DONE line lists every destination, primary first
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudRoot"
+run_menu_real "$FAKE" "2 1"
+PRIM="$FAKE/Library/CloudStorage/CloudRoot"
+if [ "$RC" -eq 0 ] \
+   && [ -n "$(find "$PRIM" -name 'claude-migration-*.tar.gz')" ] \
+   && [ -n "$(find "$FAKE/claude-migration" -name 'claude-migration-*.tar.gz')" ] \
+   && [ "$(stat -f %z "$PRIM"/claude-migration-*.tar.gz)" = "$(stat -f %z "$FAKE/claude-migration"/claude-migration-*.tar.gz)" ] \
+   && menu_out | grep -Fq "DONE. Archive: $PRIM/claude-migration-" \
+   && menu_out | grep -Fq "destinations: $PRIM (primary), $FAKE/claude-migration"; then
+  ok "2 1 real run: built in primary, copied to default, sizes equal, DONE lists all"
+else
+  bad "2 1 real multi-dest" "rc=$RC got: $(menu_out | tail -5 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 25. unwritable secondary: warn names it, primary archive intact, rc 0
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/Locked"
+chmod 000 "$FAKE/Library/CloudStorage/Locked"
+run_menu_real "$FAKE" "1 2"
+if [ "$RC" -eq 0 ] \
+   && [ -n "$(find "$FAKE/claude-migration" -name 'claude-migration-*.tar.gz')" ] \
+   && menu_out | grep -Fq "could not copy to $FAKE/Library/CloudStorage/Locked"; then
+  ok "unwritable secondary: warned, skipped, primary intact, rc 0"
+else
+  bad "unwritable secondary" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+chmod 755 "$FAKE/Library/CloudStorage/Locked"
+rm -rf "$FAKE"
+
+# 26. duplicate pick "1 1": one destination, no self-copy, DONE line has no destinations suffix
+FAKE=$(mktemp -d)
+run_menu_real "$FAKE" "1 1"
+if [ "$RC" -eq 0 ] \
+   && [ -n "$(find "$FAKE/claude-migration" -name 'claude-migration-*.tar.gz')" ] \
+   && menu_out | grep -Fq "DONE. Archive:" \
+   && ! menu_out | grep -q "destinations:" \
+   && ! menu_out | grep -q "could not copy"; then
+  ok "1 1 duplicate: deduped, single-destination DONE unchanged"
+else
+  bad "1 1 duplicate" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 27. piped positional run (no pty): no Destinations line, no copies, DONE unchanged shape
+FAKE=$(mktemp -d)
+OUT2="$FAKE/positional-out"
+HOME="$FAKE" /bin/bash "$ROOT/backup.sh" "$OUT2" </dev/null >"$PTYOUT" 2>&1; RC=$?
+if [ "$RC" -eq 0 ] \
+   && [ -n "$(find "$OUT2" -name 'claude-migration-*.tar.gz')" ] \
+   && ! menu_out | grep -q "Destinations:" \
+   && menu_out | grep -Fq "DONE. Archive:" \
+   && ! menu_out | grep -q "destinations:"; then
+  ok "piped positional run: byte-parity (no menu, no copies, plain DONE)"
+else
+  bad "piped parity" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# --- adopted Task-2-review minors ----------------------------------------------
+
+# 28. "d" = default (the letter form of Enter)
+FAKE=$(mktemp -d)
+run_menu "$FAKE" "d"
+if [ "$RC" -eq 0 ] && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-"; then
+  ok "d key: default chosen"
+else
+  bad "d key" "rc=$RC got: $(menu_out | tail -3 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 29. out-of-range number re-asks, then a valid pick proceeds
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudRoot"
+run_menu "$FAKE" "99" "2"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'Unrecognized selection' \
+   && menu_out | grep -Fq "Would write archive: $FAKE/Library/CloudStorage/CloudRoot/claude-migration-"; then
+  ok "99 out of range: re-asks, then 2 picks CloudRoot"
+else
+  bad "out-of-range" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 30. "*" as the answer must NOT glob-expand into picks (set -f) — re-ask instead
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/1"   # a digit-named file in cwd would be a glob hit if ungated
+run_menu "$FAKE" "*" "1"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'Unrecognized selection' \
+   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-"; then
+  ok "'*' answer: re-asks (no glob expansion into picks)"
+else
+  bad "glob answer" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 31. bare Enter at the custom-dir prompt re-asks instead of mkdir ""
+FAKE=$(mktemp -d)
+run_menu "$FAKE" "c" "" "1"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-" \
+   && ! menu_out | grep -Fq 'does not exist. Create it?'; then
+  ok "bare Enter at custom prompt: re-asks, no empty mkdir"
+else
+  bad "empty custom dir" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -165,6 +165,7 @@ _choose_destinations() {  # _choose_destinations <default-out> — prints DESTS,
           "~") dir="$HOME" ;;
           "~/"*) dir="$HOME/${dir:2}" ;;  # ${dir:2} strips "~/" — a #~/ pattern would tilde-expand
         esac
+        if [ -z "$dir" ]; then continue; fi   # bare Enter at the custom prompt: re-ask
         if [ -d "$dir" ]; then picked="c:$dir"; break; fi
         printf '%s does not exist. Create it? [y/N] ' "$dir" >&2
         read -r yn || { warn "backup aborted — nothing was written" >&2; exit 1; }
@@ -180,6 +181,7 @@ _choose_destinations() {  # _choose_destinations <default-out> — prints DESTS,
         ;;                              # declined — re-render the menu
       *)
         okp=1; newp=""
+        set -f                        # tokenizing is the point; an answer of "*" must not glob
         for tok in $ans; do
           case "$tok" in ''|*[!0-9]*) okp=0; break ;; esac
           if [ "$tok" -lt 1 ] || [ "$tok" -gt "$n" ]; then okp=0; break; fi
@@ -188,6 +190,7 @@ _choose_destinations() {  # _choose_destinations <default-out> — prints DESTS,
 $newp
 " in *"$needle"*) : ;; *) newp="${newp}${newp:+$'\n'}${tok}" ;; esac
         done
+        set +f
         if [ "$okp" = 1 ] && [ -n "$newp" ]; then picked="$newp"; break; fi
         printf '  Unrecognized selection: %s\n\n' "$ans" >&2
         ;;
@@ -469,11 +472,41 @@ MD
 log "Packing → $ARCHIVE"
 tar czf "$ARCHIVE" -C "$STAGE" .
 chmod 600 "$ARCHIVE"
+
+# Copy the finished archive to every additional chosen destination, size-verified.
+# A failed convenience copy warns and never fails the backup — the primary exists.
+# Single-destination runs (piped/scripted/positional-arg) skip all of this and the
+# DONE line stays byte-identical to the pre-menu shape.
+_DEST_SUFFIX=""
+while IFS= read -r _d; do
+  [ -z "$_d" ] && continue
+  if [ "$_d" != "$OUT" ]; then
+    _target="$_d/$(basename "$ARCHIVE")"
+    # The default destination may not exist yet when it is a SECONDARY (the primary
+    # is created by the main flow) — the user picked it, so create it. Unwritable
+    # targets still land in the warn branch via the cp/size check below.
+    mkdir -p -- "$_d" 2>/dev/null
+    if [ -d "$_d" ] && cp -p -- "$ARCHIVE" "$_target" 2>/dev/null \
+       && [ "$(stat -f %z "$ARCHIVE" 2>/dev/null)" = "$(stat -f %z "$_target" 2>/dev/null)" ]; then
+      log "copied → $_target"
+    else
+      warn "could not copy to $_d (skipped) — the primary archive is intact"
+    fi
+  fi
+done <<< "$DESTS"
+if [ "$(printf '%s\n' "$DESTS" | grep -c .)" -gt 1 ]; then
+  _DEST_SUFFIX=" — destinations: "
+  _first=1
+  while IFS= read -r _d; do
+    [ -z "$_d" ] && continue
+    if [ "$_first" -eq 1 ]; then _DEST_SUFFIX="$_DEST_SUFFIX$_d (primary)"; _first=0; else _DEST_SUFFIX="$_DEST_SUFFIX, $_d"; fi
+  done <<< "$DESTS"
+fi
 rm -rf "$STAGE"
 
 SIZE="$(du -sh "$ARCHIVE" | cut -f1)"
 echo
-log "DONE. Archive: $ARCHIVE  ($SIZE)"
+log "DONE. Archive: $ARCHIVE  ($SIZE)${_DEST_SUFFIX}"
 warn "This archive contains SECRETS. Move it to the new Mac over AirDrop/USB, not cloud."
 echo "Next: copy restore.sh + this archive to the new Mac, then run:"
 echo "    bash restore.sh \"$ARCHIVE\""
