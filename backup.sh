@@ -27,6 +27,8 @@
 #
 # Usage: bash backup.sh            # writes into ~/claude-migration
 #        bash backup.sh /some/dir  # writes into /some/dir
+#        bash backup.sh --list-destinations
+#                                  # print candidate destinations (path<TAB>label), exit
 #
 set -euo pipefail
 
@@ -37,14 +39,16 @@ usage() {
   # print the whole header comment block, whatever its length (a fixed range once hid
   # every line added past it — measured on rtc-ship 0.6.11)
   awk 'NR==1 {next} !/^#/ {exit} {line=$0; sub(/^# ?/, "", line); if (line == "" && !started) next; started=1; print line}' "$0"
-  printf 'Options:\n  -h, --help   show this help and exit\n  --dry-run    print what would be captured, then exit without writing\n'
+  printf 'Options:\n  -h, --help   show this help and exit\n  --dry-run    print what would be captured, then exit without writing\n  --list-destinations\n               print candidate destinations (path<TAB>label, default first) and exit\n'
 }
 DRY_RUN=0
+LIST_DESTS=0
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0;;
     --dry-run) DRY_RUN=1; shift;;
+    --list-destinations) LIST_DESTS=1; shift;;
     -*) printf '%s: unknown option: %s\n' "${0##*/}" "$1" >&2
         printf 'Try `%s --help`.\n' "${0##*/}" >&2; exit 2;;
     *) ARGS+=("$1"); shift;;
@@ -55,6 +59,55 @@ if [ "${#ARGS[@]}" -gt 1 ]; then
   exit 2
 fi
 set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+# --- destination detection (--list-destinations) -------------------------------
+# Candidates for the destination-selection menu, one "path<TAB>label" line each:
+# the default output directory FIRST, then every existing direct child of
+# ~/Library/CloudStorage/ (label = directory name), then the legacy dirs
+# ~/Dropbox and ~/OneDrive, then iCloud Drive. Existing directories only (the
+# default is ALWAYS listed — the archive is built there, it may not exist yet),
+# deduped by RESOLVED path so a CloudStorage root that is ~/Dropbox via a symlink
+# is listed once. bash-3.2 pure: the dedupe set is a newline-delimited string,
+# not an associative array.
+_dest_emit() {  # _dest_emit <path> <label> — print unless already seen (resolved)
+  local r
+  r=$( cd -- "$1" 2>/dev/null && pwd -P ) || r="$1"
+  case "$_DEST_SEEN" in
+    *"
+$r
+"*) return 0 ;;
+  esac
+  _DEST_SEEN="$_DEST_SEEN
+$r
+"
+  printf '%s\t%s\n' "$1" "$2"
+}
+_candidate_destinations() {
+  local _d
+  _DEST_SEEN=""
+  _dest_emit "$1" 'Default — this is where the archive is built'
+  if [ -d "$HOME/Library/CloudStorage" ]; then
+    for _d in "$HOME/Library/CloudStorage/"*; do
+      [ -d "$_d" ] || continue       # skips plain files AND broken symlinks
+      _dest_emit "$_d" "${_d##*/}"
+    done
+  fi
+  for _d in "$HOME/Dropbox" "$HOME/OneDrive"; do
+    [ -d "$_d" ] || continue
+    _dest_emit "$_d" "${_d##*/}"
+  done
+  if [ -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs" ]; then
+    _dest_emit "$HOME/Library/Mobile Documents/com~apple~CloudDocs" 'iCloud Drive'
+  fi
+  return 0
+}
+
+# --list-destinations is a probe, like --dry-run: print the candidates and exit
+# BEFORE any work — no config parsing, no staging, nothing written.
+if [ "$LIST_DESTS" = 1 ]; then
+  _candidate_destinations "${1:-$HOME/claude-migration}"
+  exit 0
+fi
 
 SRC="$HOME"
 STAMP="$(date +%Y%m%d-%H%M%S)"
