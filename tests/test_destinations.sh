@@ -7,11 +7,17 @@
 # via a symlink is listed once), space-named roots intact, non-directory junk
 # skipped. Every case runs against a fake HOME (mktemp -d), so detection is hermetic.
 #
+# Task 2 adds the interactive destination menu, TTY-gated: it opens only when no
+# positional OUT was given AND both stdin and stdout are terminals. Its cases run
+# through a pty (`script -q /dev/null`) with a fake HOME and PACED keystrokes --
+# flat piped input races the child (the first read can hit EOF before the bytes
+# land, measured), so keys are sent 1.5s apart. --dry-run keeps every case cheap.
+#
 # Usage: test_destinations.sh [--help]
 set -u
 export LC_ALL=C   # pin glob collation: the detection order must be deterministic
 HERE=$(cd -- "$(dirname -- "$0")" && pwd); ROOT=$(dirname "$HERE")
-[ "${1:-}" = "--help" ] && { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+[ "${1:-}" = "--help" ] && { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 [ $# -gt 0 ] && { echo "unexpected argument: $1" >&2; exit 2; }
 PASS=0; FAIL=0
 ok()  { printf '  ok   %s\n' "$1"; PASS=$((PASS+1)); }
@@ -128,6 +134,266 @@ if [ "$RC" -eq 0 ] && [ "$OUT" = "$EXPECTED" ]; then
   ok "glob metachars in path dedupe LITERALLY: MyDrive1 and MyDrive[1] both listed"
 else
   bad "glob metachars in path dedupe" "rc=$RC got: $(show "$OUT")"
+fi
+rm -rf "$FAKE"
+
+# --- Task 2: the interactive destination menu (TTY-gated multi-select) ---------
+
+PTYOUT="$HERE/.tmp-pty.out"
+trap '[ -n "$FAKE" ] && rm -rf "$FAKE"; rm -f "$PTYOUT"' EXIT
+
+run_menu() {  # run_menu <fake-home> <keys>... -- pty --dry-run run, keys paced 1.5s
+              # apart (flat input races the child; see header). Sets RC + PTYOUT.
+  FAKE="$1"; shift
+  {
+    for k in "$@"; do printf '%s\n' "$k"; sleep 1.5; done
+  } | HOME="$FAKE" script -q /dev/null /bin/bash "$ROOT/backup.sh" --dry-run >"$PTYOUT" 2>&1
+  RC=$?
+}
+run_menu_out() {  # like run_menu but WITH a positional OUT: the menu must stay shut
+  FAKE="$1"; OUTARG="$2"; shift 2
+  {
+    for k in "$@"; do printf '%s\n' "$k"; sleep 1.5; done
+  } | HOME="$FAKE" script -q /dev/null /bin/bash "$ROOT/backup.sh" --dry-run "$OUTARG" >"$PTYOUT" 2>&1
+  RC=$?
+}
+run_menu_stdout_file() {  # stdin = tty (the pty), stdout = a FILE (redirected INSIDE
+                          # the pty): a menu here would hang `backup.sh | tee log`
+  FAKE="$1"; shift
+  {
+    for k in "$@"; do printf '%s\n' "$k"; sleep 1.5; done
+  } | HOME="$FAKE" script -q /dev/null /bin/bash -c 'exec /bin/bash "$1" --dry-run > "$2" 2>&1' \
+      menu-stdout-file "$ROOT/backup.sh" "$FAKE/redir.log" >"$PTYOUT" 2>&1
+  RC=$?
+}
+run_menu_stdin_devnull() {  # stdout = tty (the pty), stdin = /dev/null (redirected
+                            # INSIDE the pty): a piped-stdin caller must get no menu
+  FAKE="$1"
+  HOME="$FAKE" script -q /dev/null /bin/bash -c 'exec /bin/bash "$1" --dry-run < /dev/null' \
+    menu-stdin-devnull "$ROOT/backup.sh" >"$PTYOUT" 2>&1
+  RC=$?
+}
+run_menu_nokeys() {  # stdin held open 2s, then EOF: a prompt that reads EOF must
+                     # abort, never spin
+  FAKE="$1"
+  ( sleep 2 ) | HOME="$FAKE" script -q /dev/null /bin/bash "$ROOT/backup.sh" --dry-run >"$PTYOUT" 2>&1
+  RC=$?
+}
+menu_out() { tr -d '\r' < "$PTYOUT"; }      # pty output, CR line-endings stripped
+RULE72="$(printf '%72s' '' | tr ' ' '=')"   # the menu's "=" * 72 rule, built not typed
+
+# 8. Enter alone: the default OUT is used (--dry-run shows it as the archive path)
+FAKE=$(mktemp -d)
+run_menu "$FAKE" ""
+if [ "$RC" -eq 0 ] && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration"; then
+  ok "Enter alone: DRY RUN shows the default OUT"
+else
+  bad "Enter alone" "rc=$RC got: $(menu_out | tail -5 | tr '\n' '|')"
+fi
+
+# 9. the pinned menu block: title, subtitle, the =x72 rule, entry 1 with label AND
+#    the default's path indented under it, both footer lines
+if menu_out | grep -Fq '📦 Mac Claude Migration' \
+   && menu_out | grep -Fq '   Where should this backup go? Pick one, several, or a custom folder' \
+   && menu_out | grep -Fq "$RULE72" && ! menu_out | grep -Eq '={73}' \
+   && menu_out | grep -Fq '  1) Default — this is where the archive is built' \
+   && menu_out | grep -Fq "     $FAKE/claude-migration" \
+   && menu_out | grep -Fq '  Enter = default only    numbers = pick several (e.g. 1 3 or 1,3)    a = all detected' \
+   && menu_out | grep -Fq '  c = custom directory    q = abort the backup'; then
+  ok "menu block: title/subtitle/rule x72/entry 1 + path/footer verbatim"
+else
+  bad "menu block" "missing pinned text; got: $(menu_out | head -12 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 10. "2 1": several picks, FIRST picked is primary -- the archive goes to
+#     candidate 2, and the chosen-set line carries both paths in pick order
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudRoot" "$FAKE/Dropbox"
+run_menu "$FAKE" "2 1"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/Library/CloudStorage/CloudRoot/claude-migration-" \
+   && ! menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-"; then
+  ok "2 1: primary = FIRST picked (candidate 2 gets the archive)"
+else
+  bad "2 1 primary" "rc=$RC got: $(menu_out | tail -6 | tr '\n' '|')"
+fi
+if menu_out | grep -Fq "Destinations: $FAKE/Library/CloudStorage/CloudRoot (primary), $FAKE/claude-migration"; then
+  ok "2 1: chosen-set line lists both paths, pick order"
+else
+  bad "2 1 chosen-set line" "got: $(menu_out | grep -i destination | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 11. "2,1": the comma form of the same grammar
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudRoot"
+run_menu "$FAKE" "2,1"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/Library/CloudStorage/CloudRoot/claude-migration-" \
+   && menu_out | grep -Fq "Destinations: $FAKE/Library/CloudStorage/CloudRoot (primary), $FAKE/claude-migration"; then
+  ok "2,1: comma-separated picks work, same result as 2 1"
+else
+  bad "2,1" "rc=$RC got: $(menu_out | tail -6 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 12. "a": every LISTED candidate, default first (primary) -- the default is
+#     candidate 1 of the list the user sees (controller ruling on the grammar)
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudRoot" "$FAKE/Dropbox"
+run_menu "$FAKE" "a"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Destinations: $FAKE/claude-migration (primary), $FAKE/Library/CloudStorage/CloudRoot, $FAKE/Dropbox" \
+   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-"; then
+  ok "a: all listed candidates, default first (primary)"
+else
+  bad "a all-listed" "rc=$RC got: $(menu_out | grep -iE 'destination|archive' | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 13. "q": abort -- exit 1, the pinned message, nothing else printed
+FAKE=$(mktemp -d)
+run_menu "$FAKE" "q"
+if [ "$RC" -eq 1 ] \
+   && menu_out | grep -Fq 'backup aborted — nothing was written' \
+   && ! menu_out | grep -q 'DRY RUN' \
+   && ! menu_out | grep -q 'Would write archive'; then
+  ok "q: exit 1, aborted, no archive path printed"
+else
+  bad "q abort" "rc=$RC got: $(menu_out | tail -3 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 14. nothing detected (bare fake HOME): only the default is offered, and it is
+#     what Enter picks (the "a collapses to default" case has the same list)
+FAKE=$(mktemp -d)
+run_menu "$FAKE" ""
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-" \
+   && menu_out | grep -Fq "Destinations: $FAKE/claude-migration (primary)" \
+   && ! menu_out | grep -Fq "$FAKE/claude-migration (primary)," \
+   && ! menu_out | grep -Eq '^ +2\)'; then
+  ok "empty detection list: only the default is offered and chosen"
+else
+  bad "empty detection list" "rc=$RC got: $(menu_out | tail -8 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 15. GATE PIN: a positional OUT + a full pty must NOT open the menu -- the piped
+#     "q" is never consumed and the run reports the positional OUT
+FAKE=$(mktemp -d)
+run_menu_out "$FAKE" "$FAKE/chosen-out" "q"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/chosen-out/claude-migration-" \
+   && ! menu_out | grep -Fq 'Mac Claude Migration'; then
+  ok "positional OUT + pty: no menu, the argument wins"
+else
+  bad "positional OUT + pty" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 16. GATE PIN (stdout half): stdin is a tty but stdout is a FILE -- a menu here
+#     would hang `backup.sh | tee log`; the piped "q" must never be consumed
+FAKE=$(mktemp -d)
+run_menu_stdout_file "$FAKE" "q"
+if [ "$RC" -eq 0 ] \
+   && grep -Fq 'DRY RUN' "$FAKE/redir.log" \
+   && ! grep -Fq 'Mac Claude Migration' "$FAKE/redir.log"; then
+  ok "stdout not a tty (stdin tty): no menu -- piped stdout stays silent"
+else
+  bad "stdout not a tty" "rc=$RC log: $(tr -d '\r' < "$FAKE/redir.log" | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 17. GATE PIN (stdin half): stdout is a tty but stdin is /dev/null -- no menu,
+#     no prompts on the tty for a piped-stdin caller
+FAKE=$(mktemp -d)
+run_menu_stdin_devnull "$FAKE"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'DRY RUN' \
+   && ! menu_out | grep -Fq 'Mac Claude Migration'; then
+  ok "stdin not a tty (stdout tty): no menu"
+else
+  bad "stdin not a tty" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 18. EOF at the prompt: abort like q -- never loop forever on a closed pipe
+FAKE=$(mktemp -d)
+run_menu_nokeys "$FAKE"
+if [ "$RC" -eq 1 ] \
+   && menu_out | grep -Fq 'backup aborted — nothing was written' \
+   && ! menu_out | grep -q 'DRY RUN'; then
+  ok "EOF at the prompt: aborts like q (rc 1, nothing written)"
+else
+  bad "EOF abort" "rc=$RC got: $(menu_out | tail -3 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 19. custom: an EXISTING directory is accepted as-is (trailing "/" trimmed)
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/custom-dest"
+run_menu "$FAKE" "c" "$FAKE/custom-dest/"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/custom-dest/claude-migration-" \
+   && menu_out | grep -Fq "Destinations: $FAKE/custom-dest (primary)"; then
+  ok "custom existing dir: accepted, trailing slash trimmed"
+else
+  bad "custom existing" "rc=$RC got: $(menu_out | tail -5 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 20. custom: a missing directory is created only after a [y/N] confirm -- and a
+#     --dry-run run ANNOUNCES the mkdir without performing it
+FAKE=$(mktemp -d)
+run_menu "$FAKE" "c" "$FAKE/new-dir" "y"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'does not exist. Create it? [y/N]' \
+   && menu_out | grep -Fq '(dry run: would create' \
+   && menu_out | grep -Fq "Would write archive: $FAKE/new-dir/claude-migration-" \
+   && [ ! -d "$FAKE/new-dir" ]; then
+  ok "custom missing dir + y under --dry-run: announced, not created"
+else
+  bad "custom mkdir dry-run" "rc=$RC got: $(menu_out | tail -6 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 21. custom: declining the create ([n]) returns to the menu -- then Enter = default
+FAKE=$(mktemp -d)
+run_menu "$FAKE" "c" "$FAKE/nope" "n" ""
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-" \
+   && [ ! -e "$FAKE/nope" ]; then
+  ok "custom declined: back to the menu, Enter = default, nothing created"
+else
+  bad "custom declined" "rc=$RC got: $(menu_out | tail -6 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 22. custom: a leading ~ expands against HOME (a literal "~" directory would be
+#     a trap -- mkdir would silently create it in the cwd)
+FAKE=$(mktemp -d)
+run_menu "$FAKE" "c" "~/custom-dest" "y"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/custom-dest/claude-migration-" \
+   && [ ! -e "$FAKE/~" ]; then
+  ok "custom ~/path expands against HOME"
+else
+  bad "custom tilde" "rc=$RC got: $(menu_out | tail -6 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 23. garbage input re-asks (menu re-rendered), then a valid pick proceeds
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudRoot"
+run_menu "$FAKE" "banana" "2"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'Unrecognized selection' \
+   && menu_out | grep -Fq "Would write archive: $FAKE/Library/CloudStorage/CloudRoot/claude-migration-"; then
+  ok "garbage re-asks, then a valid pick proceeds"
+else
+  bad "garbage re-ask" "rc=$RC got: $(menu_out | tail -6 | tr '\n' '|')"
 fi
 rm -rf "$FAKE"
 

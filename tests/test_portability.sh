@@ -61,7 +61,7 @@ trap 'rm -rf "$SENT2" "$TMPREAL"' EXIT
 #    variable") and still produce an archive
 FAKEHOME=$(mktemp -d); OUT=$(mktemp -d); rm -rf "$FAKEHOME" "$OUT"
 mkdir -p "$FAKEHOME/.config"; printf '# t\n' > "$FAKEHOME/.config/test"
-if /bin/bash "$ROOT/backup.sh" "$OUT" >"$TMPREAL" 2>&1; then
+if HOME="$FAKEHOME" /bin/bash "$ROOT/backup.sh" "$OUT" >"$TMPREAL" 2>&1; then
   found=0; for a in "$OUT"/claude-migration-*.tar.gz; do [ -f "$a" ] && found=1; done
   [ "$found" = 1 ] && ok "real /bin/bash run with empty config produces an archive" \
     || bad "real empty-config run" "no archive produced"

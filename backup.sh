@@ -107,6 +107,105 @@ _candidate_destinations() {
   return 0
 }
 
+# --- interactive destination menu ----------------------------------------------
+# Opens only when there is no positional OUT and both streams are terminals; piped,
+# scripted, hook and explicit-arg runs take exactly the old path. The archive is always
+# BUILT in the primary (first picked) destination; Task 3 copies it to the rest.
+# Grammar: Enter/d = default; "1 3" or "1,3" = several (first = primary); a = every
+# listed candidate (default included — it is entry 1); c = custom directory (a missing
+# one needs a [y/N] confirm; --dry-run only announces it); q or EOF = abort, exit 1.
+# bash-3.2 pure: indexed arrays only, no ${var,,}, expansions quoted except where
+# tokenizing is the point (the answer line after comma->space normalization).
+_choose_destinations() {  # _choose_destinations <default-out> — prints DESTS, primary first; abort exits 1
+  local default_out="$1" lines line p l ans tok tok2 yn dir i n okp newp needle out rule
+  local -a cpath=() clabel=()
+  rule="$(printf '%72s' '')"; rule="${rule// /=}"
+  lines="$(_candidate_destinations "$default_out")"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    p="${line%%$'\t'*}"
+    l="${line#*$'\t'}"
+    cpath+=("$p")
+    clabel+=("$l")
+  done <<< "$lines"
+  n="${#cpath[@]}"
+
+  local picked=""    # newline-separated picked entry indexes (pick order), or c:<path>
+  # All menu chrome goes to STDERR: the caller captures only stdout (the DESTS list),
+  # so the menu renders on the terminal while the picked paths travel in the variable.
+  while true; do
+    printf '\n📦 Mac Claude Migration\n' >&2
+    printf '   Where should this backup go? Pick one, several, or a custom folder\n' >&2
+    printf '%s\n\n' "$rule" >&2
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      printf '  %d) %s\n     %s\n' "$((i + 1))" "${clabel[$i]}" "${cpath[$i]}" >&2
+      i=$((i + 1))
+    done
+    printf '\n' >&2
+    printf '  Enter = default only    numbers = pick several (e.g. 1 3 or 1,3)    a = all detected\n' >&2
+    printf '  c = custom directory    q = abort the backup\n\n' >&2
+    read -r ans || ans="q"          # EOF at the prompt aborts like q — never spin on a closed pipe
+    ans="${ans//[,,]/ }"            # comma form of the number grammar
+    case "$ans" in
+      ""|d|D) picked="1"; break ;;
+      q|Q) warn "backup aborted — nothing was written" >&2; exit 1 ;;
+      a|A)
+        i=1; picked=""
+        while [ "$i" -le "$n" ]; do picked="$picked${picked:+$'\n'}$i"; i=$((i + 1)); done
+        break ;;
+      c|C)
+        printf '  custom directory: ' >&2
+        read -r dir || { warn "backup aborted — nothing was written" >&2; exit 1; }
+        while [ "${dir%/}" != "$dir" ] && [ "$dir" != "/" ]; do dir="${dir%/}"; done
+        # The "~/" pattern must match a LITERAL tilde in the user's input (that is the
+        # point of the branch); $HOME would never match it.
+        # shellcheck disable=SC2088
+        case "$dir" in                  # ~ expands against HOME; never a literal "~" dir
+          "~") dir="$HOME" ;;
+          "~/"*) dir="$HOME/${dir:2}" ;;  # ${dir:2} strips "~/" — a #~/ pattern would tilde-expand
+        esac
+        if [ -d "$dir" ]; then picked="c:$dir"; break; fi
+        printf '%s does not exist. Create it? [y/N] ' "$dir" >&2
+        read -r yn || { warn "backup aborted — nothing was written" >&2; exit 1; }
+        case "$yn" in
+          y|Y|yes|YES)
+            if [ "$DRY_RUN" = 1 ]; then
+              printf '(dry run: would create %s)\n' "$dir" >&2
+            else
+              mkdir -p -- "$dir" || exit 1
+            fi
+            picked="c:$dir"; break ;;
+        esac
+        ;;                              # declined — re-render the menu
+      *)
+        okp=1; newp=""
+        for tok in $ans; do
+          case "$tok" in ''|*[!0-9]*) okp=0; break ;; esac
+          if [ "$tok" -lt 1 ] || [ "$tok" -gt "$n" ]; then okp=0; break; fi
+          needle="$(printf '\n%s\n' "$tok")"
+          case "
+$newp
+" in *"$needle"*) : ;; *) newp="${newp}${newp:+$'\n'}${tok}" ;; esac
+        done
+        if [ "$okp" = 1 ] && [ -n "$newp" ]; then picked="$newp"; break; fi
+        printf '  Unrecognized selection: %s\n\n' "$ans" >&2
+        ;;
+    esac
+  done
+
+  out=""
+  while IFS= read -r tok2; do
+    [ -z "$tok2" ] && continue
+    case "$tok2" in
+      c:*) out="${out}${out:+$'\n'}${tok2#c:}" ;;
+      *)   out="${out}${out:+$'\n'}${cpath[$((tok2 - 1))]}" ;;
+    esac
+  done <<< "$picked"
+  printf '%s\n' "$out"
+  return 0
+}
+
 # --list-destinations is a probe, like --dry-run: print the candidates and exit
 # BEFORE any work — no config parsing, no staging, nothing written.
 if [ "$LIST_DESTS" = 1 ]; then
@@ -123,6 +222,27 @@ ARCHIVE="$OUT/claude-migration-$STAMP.tar.gz"
 
 log() { printf '\033[1;34m▶ %s\033[0m\n' "$*"; }
 warn(){ printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
+
+# --- destination menu gate -------------------------------------------------------
+# No positional OUT AND both streams a terminal -> the interactive selector. The
+# archive is built in the primary (first picked) destination; DESTS carries the full
+# chosen set for Task 3's copies. Everything else (pipe, script, hook, explicit arg)
+# takes exactly the pre-menu path.
+DESTS="$OUT"
+if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+  DESTS="$(_choose_destinations "$OUT")" || exit 1
+  OUT="${DESTS%%$'\n'*}"
+  STAGE="$OUT/stage-$STAMP"
+  HOMEDIR="$STAGE/home"
+  ARCHIVE="$OUT/claude-migration-$STAMP.tar.gz"
+  printf 'Destinations: '
+  _first=1
+  while IFS= read -r _d; do
+    [ -z "$_d" ] && continue
+    if [ "$_first" -eq 1 ]; then printf '%s (primary)' "$_d"; _first=0; else printf ', %s' "$_d"; fi
+  done <<< "$DESTS"
+  printf '\n'
+fi
 
 # Per-machine configuration, parsed BEFORE the dry-run exit so --dry-run shows the
 # warning too (header documents the env vars / config files).
