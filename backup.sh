@@ -185,7 +185,10 @@ _choose_destinations() {  # _choose_destinations <default-out> — prints DESTS,
         okp=1; newp=""
         set -f                        # tokenizing is the point; an answer of "*" must not glob
         for tok in $ans; do
-          case "$tok" in ''|*[!0-9]*) okp=0; break ;; esac
+          case "$tok" in
+            ''|*[!0-9]*) okp=0; break ;;
+            ??????*) okp=0; break ;;  # >=6 digits: no menu has that many entries, and a
+          esac                         # 20-digit token makes `[` error rc 2 and fall
           if [ "$tok" -lt 1 ] || [ "$tok" -gt "$n" ]; then okp=0; break; fi
           needle="$(printf '\n%s\n' "$tok")"
           case "

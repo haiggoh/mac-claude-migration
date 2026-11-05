@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.1.4] — 2026-11-05
+
+### Fixed — destination-menu hardening (deferred-review polish)
+
+- A 20-digit (or ≥6-digit) answer token now re-asks instead of slipping past the
+  range check (bash `[` errors on the overflow and the old code read that as
+  "valid"); the resolution index could then abort the subshell. Pinned by case 34
+  (mutation-checked).
+- The `*`-answer pin is now DISCRIMINATING: the pty child cwd's into the fake HOME,
+  so a planted digit-named directory would be a real glob hit without `set -f`.
+- New end-to-end pin: a SPACE-NAMED cloud root selected through the menu (the path
+  travels menu → DESTS → archive, spaces intact).
+- Test pacing: an initial 1 s sleep before the first keystroke (the one race that
+  ate input in flat probes); suites remain hermetic and fast (run-all ≈45 s).
+
 ## [0.1.3] — 2026-11-05
 
 ### Added — 📦 interactive destination-selection menu (user spec, modelled on the iphone-backup tool)

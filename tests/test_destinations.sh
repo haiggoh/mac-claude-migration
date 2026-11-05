@@ -143,9 +143,12 @@ PTYOUT="$HERE/.tmp-pty.out"
 trap '[ -n "$FAKE" ] && rm -rf "$FAKE"; rm -f "$PTYOUT"' EXIT
 
 run_menu() {  # run_menu <fake-home> <keys>... -- pty --dry-run run, keys paced 1.5s
-              # apart (flat input races the child; see header). Sets RC + PTYOUT.
+              # apart (flat input races the child; see header). An initial sleep lets the
+              # child reach its first read before the first key (the one race that ate
+              # keystrokes in the flat probes). Sets RC + PTYOUT.
   FAKE="$1"; shift
   {
+    sleep 1
     for k in "$@"; do printf '%s\n' "$k"; sleep 1.5; done
   } | HOME="$FAKE" script -q /dev/null /bin/bash "$ROOT/backup.sh" --dry-run >"$PTYOUT" 2>&1
   RC=$?
@@ -494,14 +497,21 @@ else
 fi
 rm -rf "$FAKE"
 
-# 30. "*" as the answer must NOT glob-expand into picks (set -f) — re-ask instead
+# 30. "*" as the answer must NOT glob-expand into picks (set -f) — re-ask instead.
+#     The child CWDs into $FAKE so the planted digit dir IS in its cwd: without set -f
+#     the "*" would expand to "1" and pick it — this makes the pin discriminating.
 FAKE=$(mktemp -d)
-mkdir -p "$FAKE/1"   # a digit-named file in cwd would be a glob hit if ungated
-run_menu "$FAKE" "*" "1"
+mkdir -p "$FAKE/1"
+{
+  sleep 1; printf '*\n'; sleep 1.5; printf '1\n'; sleep 1.5
+} | HOME="$FAKE" script -q /dev/null /bin/bash -c 'cd "$2" && exec /bin/bash "$1" --dry-run' \
+    menu-cd-fake "$ROOT/backup.sh" "$FAKE" >"$PTYOUT" 2>&1
+RC=$?
 if [ "$RC" -eq 0 ] \
    && menu_out | grep -Fq 'Unrecognized selection' \
-   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-"; then
-  ok "'*' answer: re-asks (no glob expansion into picks)"
+   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-" \
+   && ! menu_out | grep -Fq "Would write archive: $FAKE/1/claude-migration-"; then
+  ok "'*' answer: re-asks (no glob expansion into the planted digit dir)"
 else
   bad "glob answer" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
 fi
@@ -535,6 +545,33 @@ else
   bad "uncreatable secondary" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
 fi
 chmod 755 "$FAKE"
+rm -rf "$FAKE"
+
+# 33. END-TO-END: a SPACE-NAMED cloud root selected through the pty menu — the review
+#     flagged the space pin as listing-only; here the path travels menu -> DESTS -> archive
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/GoogleDrive-1 My Drive"
+run_menu_real "$FAKE" "2"
+if [ "$RC" -eq 0 ] \
+   && [ -n "$(find "$FAKE/Library/CloudStorage/GoogleDrive-1 My Drive" -name 'claude-migration-*.tar.gz')" ] \
+   && menu_out | grep -Fq "DONE. Archive: $FAKE/Library/CloudStorage/GoogleDrive-1 My Drive/claude-migration-"; then
+  ok "space-named root: selected through the menu, archive lands there"
+else
+  bad "space-named root e2e" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 34. a 20-digit token must RE-ASK: bash `[` errors (rc 2) on the overflow, the old
+#     range-check fell through as "valid", and the resolution index aborted the subshell
+FAKE=$(mktemp -d)
+run_menu "$FAKE" "12345678901234567890" "1"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'Unrecognized selection' \
+   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-"; then
+  ok "20-digit token: re-asks (no integer-overflow pass-through)"
+else
+  bad "int overflow" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
 rm -rf "$FAKE"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
