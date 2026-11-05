@@ -70,12 +70,17 @@ set -- "${ARGS[@]+"${ARGS[@]}"}"
 # is listed once. bash-3.2 pure: the dedupe set is a newline-delimited string,
 # not an associative array.
 _dest_emit() {  # _dest_emit <path> <label> — print unless already seen (resolved)
-  local r
+  local r needle
   r=$( cd -- "$1" 2>/dev/null && pwd -P ) || r="$1"
-  case "$_DEST_SEEN" in
-    *"
+  # The seen-set is a case PATTERN; the needle is expanded INSIDE one continuous double
+  # quote so the match is LITERAL — a path containing [ * ? must never act as a pattern
+  # (bash already matches case-pattern expansions literally, but this states it and keeps
+  # it POSIX-portable; pinned by tests/test_destinations.sh case 7).
+  needle="
 $r
-"*) return 0 ;;
+"
+  case "$_DEST_SEEN" in
+    *"$needle"*) return 0 ;;
   esac
   _DEST_SEEN="$_DEST_SEEN
 $r

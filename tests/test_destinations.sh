@@ -27,21 +27,22 @@ show() { printf '%s' "$1" | tr '\t' '>'; }   # tabs made visible in failure mess
 FAKE=""
 trap '[ -n "$FAKE" ] && rm -rf "$FAKE"; :' EXIT
 
-# 1. modern CloudStorage roots + legacy Dropbox + iCloud: the 4 detected dirs plus
-#    the default, default FIRST, labels exact
+# 1. modern CloudStorage roots + legacy Dropbox + OneDrive + iCloud: the 5 detected dirs
+#    plus the default, default FIRST, labels exact
 FAKE=$(mktemp -d)
 mkdir -p "$FAKE/Library/CloudStorage/OneDrive-SomeCompanyGmbH" \
          "$FAKE/Library/CloudStorage/GoogleDrive-xyz" \
-         "$FAKE/Dropbox" \
+         "$FAKE/Dropbox" "$FAKE/OneDrive" \
          "$FAKE/Library/Mobile Documents/com~apple~CloudDocs"
 run_list "$FAKE"
 EXPECTED="$(line "$FAKE/claude-migration" "$DEFAULT_LABEL")
 $(line "$FAKE/Library/CloudStorage/GoogleDrive-xyz" 'GoogleDrive-xyz')
 $(line "$FAKE/Library/CloudStorage/OneDrive-SomeCompanyGmbH" 'OneDrive-SomeCompanyGmbH')
 $(line "$FAKE/Dropbox" 'Dropbox')
+$(line "$FAKE/OneDrive" 'OneDrive')
 $(line "$FAKE/Library/Mobile Documents/com~apple~CloudDocs" 'iCloud Drive')"
 if [ "$RC" -eq 0 ] && [ "$OUT" = "$EXPECTED" ]; then
-  ok "modern roots + legacy + iCloud: 4 detected + default first, exact labels"
+  ok "modern roots + legacy + iCloud: 5 detected + default first, exact labels"
 else
   bad "modern roots + legacy + iCloud" "rc=$RC got: $(show "$OUT")"
 fi
@@ -76,15 +77,16 @@ else
 fi
 rm -rf "$FAKE"
 
-# 4. non-directory junk inside CloudStorage: skipped
+# 4. non-directory junk AND a broken symlink inside CloudStorage: skipped
 FAKE=$(mktemp -d)
 mkdir -p "$FAKE/Library/CloudStorage/RealRoot"
 printf 'not a directory\n' > "$FAKE/Library/CloudStorage/notes.txt"
+ln -s /nonexistent-target-xyz "$FAKE/Library/CloudStorage/Dead"
 run_list "$FAKE"
 EXPECTED="$(line "$FAKE/claude-migration" "$DEFAULT_LABEL")
 $(line "$FAKE/Library/CloudStorage/RealRoot" 'RealRoot')"
 if [ "$RC" -eq 0 ] && [ "$OUT" = "$EXPECTED" ]; then
-  ok "non-directory junk inside CloudStorage: skipped"
+  ok "non-directory junk + broken symlink inside CloudStorage: skipped"
 else
   bad "non-directory junk skipped" "rc=$RC got: $(show "$OUT")"
 fi
@@ -111,6 +113,23 @@ if "$ROOT/backup.sh" --help 2>&1 | grep -q -- --list-destinations; then
 else
   bad "--help" "no mention of --list-destinations"
 fi
+
+# 7. glob METACHARACTERS in a resolved path must match LITERALLY in the dedupe seen-set:
+#    it is a case PATTERN, so an unquoted expansion turns [1] into a character class and
+#    silently suppresses the distinct directory MyDrive[1] because MyDrive1 is seen.
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/MyDrive1" \
+         "$FAKE/Library/CloudStorage/MyDrive[1]"
+run_list "$FAKE"
+EXPECTED="$(line "$FAKE/claude-migration" "$DEFAULT_LABEL")
+$(line "$FAKE/Library/CloudStorage/MyDrive1" 'MyDrive1')
+$(line "$FAKE/Library/CloudStorage/MyDrive[1]" 'MyDrive[1]')"
+if [ "$RC" -eq 0 ] && [ "$OUT" = "$EXPECTED" ]; then
+  ok "glob metachars in path dedupe LITERALLY: MyDrive1 and MyDrive[1] both listed"
+else
+  bad "glob metachars in path dedupe" "rc=$RC got: $(show "$OUT")"
+fi
+rm -rf "$FAKE"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
