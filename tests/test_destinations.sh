@@ -519,5 +519,23 @@ else
 fi
 rm -rf "$FAKE"
 
+# 32. missing AND uncreatable secondary (default picked as secondary under a read-only
+#     HOME): mkdir -p fails -> warn + skip, rc 0, primary archive intact. Under set -e an
+#     UNGUARDED mkdir would abort the whole script here (no DONE, staging left behind).
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudRoot"
+chmod 555 "$FAKE"
+run_menu_real "$FAKE" "2 1"
+if [ "$RC" -eq 0 ] \
+   && [ -n "$(find "$FAKE/Library/CloudStorage/CloudRoot" -name 'claude-migration-*.tar.gz')" ] \
+   && menu_out | grep -Fq "could not copy to $FAKE/claude-migration" \
+   && menu_out | grep -Fq "DONE. Archive:"; then
+  ok "uncreatable missing secondary: warned, skipped, rc 0, DONE printed, primary intact"
+else
+  bad "uncreatable secondary" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+fi
+chmod 755 "$FAKE"
+rm -rf "$FAKE"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

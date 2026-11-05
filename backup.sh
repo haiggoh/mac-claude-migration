@@ -483,10 +483,11 @@ while IFS= read -r _d; do
   if [ "$_d" != "$OUT" ]; then
     _target="$_d/$(basename "$ARCHIVE")"
     # The default destination may not exist yet when it is a SECONDARY (the primary
-    # is created by the main flow) — the user picked it, so create it. Unwritable
-    # targets still land in the warn branch via the cp/size check below.
-    mkdir -p -- "$_d" 2>/dev/null
-    if [ -d "$_d" ] && cp -p -- "$ARCHIVE" "$_target" 2>/dev/null \
+    # is created by the main flow) — the user picked it, so create it. mkdir is INSIDE
+    # the guarded if: under set -euo pipefail a bare failing mkdir would abort the whole
+    # script; here an uncreatable target simply lands in the warn branch.
+    if { [ -d "$_d" ] || mkdir -p -- "$_d" 2>/dev/null; } \
+       && cp -p -- "$ARCHIVE" "$_target" 2>/dev/null \
        && [ "$(stat -f %z "$ARCHIVE" 2>/dev/null)" = "$(stat -f %z "$_target" 2>/dev/null)" ]; then
       log "copied → $_target"
     else
