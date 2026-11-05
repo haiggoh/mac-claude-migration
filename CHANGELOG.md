@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.1.3] — 2026-11-05
+
+### Added — 📦 interactive destination-selection menu (user spec, modelled on the iphone-backup tool)
+
+- A bare `backup.sh` on a terminal opens a branded destination selector: detected cloud
+  roots (`~/Library/CloudStorage/*`, legacy `~/Dropbox`/`~/OneDrive`, iCloud Drive) plus
+  the default output directory (shown first, with its path). Multi-select
+  (`1 3` / `1,3`, `a` = all listed, `Enter`/`d` = default) or a custom directory
+  (`c`, with a `[y/N]` confirm before `mkdir`; `--dry-run` only announces it).
+- The archive is always **built in the primary** (first picked) destination, then copied
+  — byte-size-verified — to every additional chosen destination; a failed copy warns and
+  never fails the backup. The DONE line lists all destinations on multi-dest runs.
+- `--list-destinations` prints the candidates as `path<TAB>label` (machine-readable),
+  exits before any work.
+- Piped, scripted, cron and explicit-directory runs never open the menu — byte-identical
+  to before (pinned). Pure bash 3.2 throughout; `tests/test_destinations.sh` (34 cases,
+  pty-driven menu tests included) is registered in `run-all.sh`.
+- Also fixed: the portability suite's real-run test now runs against a fake HOME
+  (it was packaging the developer's live home — slow and flaky under session writes).
+
 ## [0.1.2] — 2026-11-03 — 📦 branding lands on the public-release lineage
 
 - **Added:** the emoji-rollout Task 21 branding — 📦 leads both scripts'

@@ -25,8 +25,10 @@
 #   what to carry. The source user/home are recorded in meta.env so restore.sh
 #   can rewrite absolute-path symlinks on a machine with a different username.
 #
-# Usage: bash backup.sh            # writes into ~/claude-migration
-#        bash backup.sh /some/dir  # writes into /some/dir
+# Usage: bash backup.sh            # interactive on a terminal: destination menu,
+#                                  # archive built in the primary, copied to the rest;
+#                                  # piped/scripted: writes into ~/claude-migration
+#        bash backup.sh /some/dir  # writes into /some/dir (menu stays shut)
 #        bash backup.sh --list-destinations
 #                                  # print candidate destinations (path<TAB>label), exit
 #

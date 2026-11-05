@@ -5,11 +5,26 @@ redownloaded, reinstall everything that can.**
 
 ```console
 $ ./backup.sh --dry-run          # show what would be captured, write nothing
-$ ./backup.sh                    # -> ~/claude-migration/claude-migration-<stamp>.tar.gz
+$ ./backup.sh                    # interactive: destination menu (see below)
+                                  # piped/scripted: -> ~/claude-migration/claude-migration-<stamp>.tar.gz
+$ ./backup.sh /some/dir          # writes into /some/dir, menu stays shut
+$ ./backup.sh --list-destinations   # machine-readable candidate list, exit 0
 $ ./restore.sh <archive.tar.gz>  # on the new Mac
 $ ./tests/run-all.sh
 ALL SUITES PASSED
 ```
+
+## Choosing destinations (interactive menu)
+
+On a terminal, a bare `backup.sh` opens a destination selector (modelled on the
+iphone-backup tool): it detects the common cloud-provider roots
+(`~/Library/CloudStorage/*`, plus legacy `~/Dropbox`/`~/OneDrive` and iCloud Drive),
+shows the default output directory first with its path, and lets you pick **several
+destinations at once** (`1 3` or `1,3`; `a` = all listed; `Enter` = default only) or a
+custom directory (`c`, with a confirm before any `mkdir`). The archive is always built
+in the primary (first picked) destination and then copied — size-verified — to each
+additional one; a failed copy warns and never fails the backup. Piped, scripted, cron
+and explicit-directory runs never open the menu and behave exactly as before.
 
 ## What it captures, and what it deliberately does not
 
