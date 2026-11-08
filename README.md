@@ -3,6 +3,17 @@
 Move a whole Claude Code setup to a new Mac: **package what cannot be
 redownloaded, reinstall everything that can.**
 
+## Install
+
+```sh
+brew install haiggoh/tap/mac-claude-migration
+# puts mac-claude-backup and mac-claude-restore on your PATH;
+# the tap's hourly auto-bump keeps the formula on the newest release,
+# so `brew upgrade mac-claude-migration` is all the updating you do
+```
+
+No Homebrew (or prefer the scripts)? Clone this repo and run them directly:
+
 ```console
 $ ./backup.sh --dry-run          # show what would be captured, write nothing
 $ ./backup.sh                    # interactive: destination menu (see below)

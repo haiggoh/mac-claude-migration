@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.1.5] — 2026-11-08
+
+### Added — 🍺 Homebrew install
+
+- `brew install haiggoh/tap/mac-claude-migration` puts `mac-claude-backup` and
+  `mac-claude-restore` on your PATH (formula merged in haiggoh/homebrew-tap PR #20).
+  The tap's hourly `bump-formulas.yml` repoints the formula at each new release
+  automatically, so `brew upgrade mac-claude-migration` keeps the commands current.
+- README gains the brew install line above the direct `./backup.sh` usage.
+
 ## [0.1.4] — 2026-11-05
 
 ### Fixed — destination-menu hardening (deferred-review polish)
