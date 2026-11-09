@@ -221,3 +221,9 @@ tentative call. Do not stop for it.
   `.superpowers/sdd/2026-11-09-repo-autodiscovery/progress.md` (git-ignored but
   on disk: read it first — `_read_repo_list` gains a `comment` state so user
   comments survive rewrites). Secret scan of all touched files: clean (0/6).
+- 2026-11-09 ~18:2x — Task 2 list-file I/O + merge complete: `_read_repo_list` /
+  `_write_repo_list` / `_merge_repos` (+ `_merge_decided`) added to backup.sh after
+  `_repo_remote`; `tests/test_repo_list.sh` 14/14 (RED first: extraction barrier
+  fired), `tests/run-all.sh` ALL SUITES PASSED rc 0 (14+9+9+3+36+33+14). Comment state
+  carries verbatim lines per the ledger ruling (lossless rewrite, cmp-proven);
+  atomic write proven by an inode-change case (temp+mv, not direct write).

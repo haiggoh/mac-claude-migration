@@ -290,6 +290,133 @@ _repo_remote() {  # <abs-dir> — origin URL, else first remote URL, else empty
   return 0
 }
 
+# --- repo list file (0.2.0) ------------------------------------------------------
+# ~/.claude-migration-repos stays hand-editable; the canonical line grammar:
+#   path     record — remote URL + exact commit + uncommitted overlay on restore
+#   !path    exclude — never offered again
+#   +path    copy — whole tree incl. .git into repo-copies/ in the archive
+#   ?path    undecided — found without a remote on a non-terminal run
+#   # ...    comment — preserved verbatim on rewrite (blank lines too)
+# Read is liberal (design builder call 4): surrounding whitespace, a leading
+# `~/`, trailing `/` and a trailing CR are stripped; only `!`/`+`/`?` are
+# prefixes, any other line is a bare record. Read emits one `state<TAB>payload`
+# line per input line — state record|exclude|copy|undecided|comment; a comment
+# payload is the verbatim line so the flow rebuilds the file losslessly (ledger
+# ruling: user comments survive rewrites). Write converts merged state lines
+# back to canonical file lines, prepends the generated header only when the
+# file is created, and writes atomically (mktemp in the same dir + mv).
+
+_read_repo_list() {  # _read_repo_list <file> — print state<TAB>payload, one per line
+  local file="$1" line trimmed state path
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"                                # CRLF files read clean
+    trimmed="$line"
+    trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"    # strip surrounding whitespace
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    case "$trimmed" in
+      ''|'#'*) printf 'comment\t%s\n' "$line"; continue ;;   # verbatim, blank lines included
+    esac
+    case "$trimmed" in
+      '!'*) state=exclude;   path="${trimmed:1}" ;;
+      '+'*) state=copy;      path="${trimmed:1}" ;;
+      '?'*) state=undecided; path="${trimmed:1}" ;;
+      *)   state=record;    path="$trimmed" ;;
+    esac
+    path="${path#"${path%%[![:space:]]*}"}"              # whitespace after the prefix
+    path="${path%"${path##*[![:space:]]}"}"
+    while [ "$path" != "${path%/}" ] && [ "$path" != "/" ]; do path="${path%/}"; done
+    # shellcheck disable=SC2088  # '~/' must match a LITERAL tilde — $HOME would never match it
+    case "$path" in
+      '~/'*) path="${path:2}" ;;
+      '~')   path="" ;;
+    esac
+    if [ -z "$path" ]; then printf 'comment\t%s\n' "$line"; continue; fi
+    printf '%s\t%s\n' "$state" "$path"
+  done < "$file"
+  return 0
+}
+
+_write_repo_list() {  # _write_repo_list <file> <merged-content> — atomic write, header on create
+  local file="$1" content="$2" tmp line state payload
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
+  {
+    if [ ! -e "$file" ]; then
+      printf '%s\n' \
+        '# Repo list for backup.sh — one path per line, relative to $HOME.' \
+        '#   path    record: remote URL + exact commit + uncommitted overlay on restore' \
+        '#   !path   excluded: never offered again' \
+        '#   +path   copy the whole tree (incl. .git) into the archive (repo-copies/)' \
+        '#   ?path   undecided: found without a remote on a non-terminal run' \
+        '# Forget remembered answers and ask again: `backup.sh --reset-choices`,' \
+        '# or the startup menu on a terminal run.'
+    fi
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      state="${line%%$'\t'*}"
+      payload="${line#*$'\t'}"
+      case "$state" in
+        exclude)   printf '!%s\n' "$payload" ;;
+        copy)      printf '+%s\n' "$payload" ;;
+        undecided) printf '?%s\n' "$payload" ;;
+        comment)   printf '%s\n' "$payload" ;;    # verbatim line
+        *)         printf '%s\n' "$payload" ;;    # record: bare canonical path
+      esac
+    done <<< "$content"
+  } > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; return 1; }
+  return 0
+}
+
+_merge_decided() {  # _merge_decided <path> — rc 0 when the path is already decided
+  local p="$1" x
+  for x in ${DECIDED_RECORD[@]+"${DECIDED_RECORD[@]}"} \
+           ${DECIDED_EXCLUDE[@]+"${DECIDED_EXCLUDE[@]}"} \
+           ${DECIDED_COPY[@]+"${DECIDED_COPY[@]}"} \
+           ${DECIDED_UNDECIDED[@]+"${DECIDED_UNDECIDED[@]}"}; do
+    [ "$x" = "$p" ] && return 0
+  done
+  return 1
+}
+
+_merge_repos() {  # stdin: state<TAB>payload lines (from _read_repo_list); args: discovered rel paths
+  # Sets DECIDED_RECORD/EXCLUDE/COPY/UNDECIDED, NEW_REMOTE, NEW_NOREMOTE, MISSING,
+  # MERGE_LINES (the read lines in order, for a lossless rewrite).
+  local state payload path d url
+  DECIDED_RECORD=(); DECIDED_EXCLUDE=(); DECIDED_COPY=(); DECIDED_UNDECIDED=()
+  NEW_REMOTE=(); NEW_NOREMOTE=(); MISSING=(); MERGE_LINES=()
+  while IFS=$'\t' read -r state payload; do
+    [ -n "$state" ] || continue
+    MERGE_LINES+=("$state"$'\t'"$payload")
+    case "$state" in
+      record|exclude|copy|undecided)
+        path="$payload"
+        while [ "$path" != "${path%/}" ] && [ "$path" != "/" ]; do path="${path%/}"; done
+        [ -n "$path" ] || continue
+        case "$state" in
+          record)    DECIDED_RECORD+=("$path") ;;
+          exclude)   DECIDED_EXCLUDE+=("$path") ;;
+          copy)      DECIDED_COPY+=("$path") ;;
+          undecided) DECIDED_UNDECIDED+=("$path") ;;
+        esac
+        if [ ! -d "$HOME/$path" ]; then
+          MISSING+=("$path")
+          warn "listed repo missing: $path"    # the line is kept; the decision stands
+        fi
+        ;;
+    esac
+  done
+  for d in "$@"; do
+    while [ "$d" != "${d%/}" ] && [ "$d" != "/" ]; do d="${d%/}"; done
+    [ -n "$d" ] || continue
+    _merge_decided "$d" && continue
+    url=""
+    if [ -d "$HOME/$d/.git" ]; then url="$(_repo_remote "$HOME/$d")"; fi
+    if [ -n "$url" ]; then NEW_REMOTE+=("$d"); else NEW_NOREMOTE+=("$d"); fi
+  done
+  return 0
+}
+
 # --list-destinations is a probe, like --dry-run: print the candidates and exit
 # BEFORE any work — no config parsing, no staging, nothing written.
 if [ "$LIST_DESTS" = 1 ]; then
