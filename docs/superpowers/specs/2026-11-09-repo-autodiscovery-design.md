@@ -1,6 +1,6 @@
 # Repo auto-discovery for backup.sh — design
 
-Date: 2026-11-09 · Status: draft for review · Target version: 0.2.0
+Date: 2026-11-09 · Status: builder-checked (self, 2026-11-09 — see §Builder check) · Target version: 0.2.0
 
 ## Why
 
@@ -190,3 +190,69 @@ only for the case where discovery itself finds zero repos.
   `/bin/bash` 3.2. A non-terminal run must be proven not to prompt, e.g. by
   running with stdin from `/dev/null` and a timeout.
 - Version bump to 0.2.0 on every version surface (`VERSION`, CHANGELOG, README).
+
+## Builder check — 2026-11-09 (self)
+
+The §5.1 re-dispatch timed out on all four remote validator lanes (Gemini 3.8
+Flash, Mistral Large 4, DeepSeek V4.1 Flash, Step 5 Preview — read timeouts,
+last budget 238 s), so per handoff rule 5 this builder read was done by the
+implementing session itself. Standing dispatch change (user, 2026-11-09
+03:42): model-**role** filters are dropped for the rest of this session — any
+available lane on the ladder may serve any role; `avoid_family` is kept only
+where the milestone-QC playbook demands an out-of-family reviewer. Baseline
+re-verified immediately before: `tests/run-all.sh` → ALL SUITES PASSED (0.1.5
+tree).
+
+Questions a builder would need answered, settled here so the plan does not
+guess. None needed only-the-user input; §6 stays empty.
+
+1. **Startup-menu grammar** (§8 named letters `c`/`r`, but the user's standing
+   rule is numbers = actions): numbered options, Enter = carry on, and the
+   design's letters stay as aliases — `1`/Enter = carry on, `2`/`c` = change
+   remembered choices, `3`/`r` = re-scan from scratch, `q` = abort. *Builder's
+   call;* satisfies the user rule and the design text simultaneously, and
+   matches `_choose_destinations` (numbers select, letters are verbs).
+2. **`--reset-choices` with `MIGRATION_REPOS` set**: exit 2 with a message
+   naming the override; the prefs file is not touched. *Builder's call;* the
+   design's constraint for `MIGRATION_REPOS` is explicit — no discovery, no
+   prompts, **no file writes** — and deleting prefs is a file write.
+3. **`--reset-choices` with `--dry-run`**: print what would be forgotten,
+   change nothing, continue the dry run. *Builder's call;* a dry run never
+   prompts and writes nothing, so it may only announce.
+4. **List-file reading normalisation**: an optional leading `~/` and any
+   trailing `/` are stripped from read lines; the file is always written with
+   canonical `$HOME`-relative paths. *Builder's call;* the generated header
+   teaches users the format, so a `~/`-prefixed hand-written line must not
+   break silently.
+5. **Depth limit = 4** on the `find` (a repo root at depth ≤ 3, its `.git` at
+   depth ≤ 4): exactly reaches `~/ClaudeWorkspace/.wt/<name>`. *Builder's
+   call;* the design leaves the number open and demands measurement — deeper
+   levels are added only if the walk stays well under the ~10 s budget.
+6. **Nested-repo suppression**: post-filter on the depth-first find output —
+   any root whose path has an already-accepted root as an ancestor is dropped.
+   *Builder's call;* `find -prune` cannot know a directory is a repo before
+   entering it, and the accepted-list is small enough for prefix matching.
+7. **Whole-tree copy exclusions**: the file list is `git ls-files -c -o
+   --exclude-standard` (tracked + untracked, gitignore-respected) plus the
+   `.git` tree itself, then the overlay's existing extra greps
+   (`.venv`/`venv`/`node_modules`/`__pycache__`, `.DS_Store`) are applied — a
+   *tracked* node_modules must not bloat the archive. Same newline-separated
+   `tar -T` pattern as the overlay (same known filename edge, same as 0.1.x).
+   *Builder's call;* consistency with the existing overlay step.
+8. **A user-listed repo under a pruned or cloud path is honoured** (including
+   a `+` whole-tree copy): pruning governs *discovery only*; an explicit line
+   in the list file is the user's own choice. Discovery never plants such an
+   entry. *Builder's call;* the anti-goal is about mcm walking, not about
+   second-guessing an explicit user decision.
+9. **Output channels**: discovery summary and warnings use the script's
+   existing `log()`/`warn()` (stdout), like every other phase; only
+   interactive menus print to stderr. *Builder's call;* matches the script's
+   established behaviour.
+10. **Linked worktrees restore as recorded repos** (clone + SHA + overlay to
+    the worktree's path): the design's tentative call is confirmed. *Builder's
+    call;* simplest, loses no uncommitted work, and does not depend on the
+    main checkout being restored first.
+
+Also re-verified from the tree: the only 0.2.0 version surfaces are `VERSION`
+and `CHANGELOG.md`'s top entry (`grep -rn 0.1.5` finds nothing in README.md or
+the scripts; the two handoff hits are this feature's own docs).

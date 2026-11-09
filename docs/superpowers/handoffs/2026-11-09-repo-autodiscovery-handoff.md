@@ -177,3 +177,10 @@ tentative call. Do not stop for it.
 
 - 2026-11-09 02:30 — design drafted, builder check failed on all lanes, handed over
   (Opus 5.5).
+- 2026-11-09 03:52 — baseline re-verified (run-all.sh ALL SUITES PASSED); §5.1
+  builder-check re-dispatch timed out on all four remote lanes (Gemini/Mistral/
+  DeepSeek V4.1/Step 5), so the builder read was done by this session per rule 5:
+  10 settled calls appended to the design, none user-blocking. Dispatch model-role
+  filters dropped for this session (user, 03:42); identity confirmed from the session
+  envelope (z-ai/glm-5.3-flash), trailer taken from the attribution table since the
+  project memory dir is empty (GLM 5.3 Flash).
