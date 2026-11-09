@@ -122,9 +122,42 @@ tentative call. Do not stop for it.
 2. **Plan:** write the implementation plan with `superpowers:writing-plans` at
    `docs/superpowers/plans/2026-11-09-repo-autodiscovery.md`. Its header names
    `superpowers:executing-plans`, so the executor does every task itself plus one
-   final review. Commit.
+   final review.
+
+   **REQUIRED (user, 2026-11-09 02:31):** the plan applies the playbook
+   `~/.claude/plans/_playbooks/Playbook-milestone-qc-offload-test-proof.md`. Read
+   it in full. The plan gets a "Quality-control milestones" section with 3–6 named
+   milestones. Each milestone lists its requirements, with the design/plan wording
+   copied verbatim, and the test files that cover them. Copy the playbook's
+   standing rule into the plan verbatim, along with its dispatch brief. Suggested
+   milestones (adjust to the real task split):
+   - **(a) Discovery walk + prunes.** Linked-worktree `.git` file; nested repos not
+     listed; `~/Library` / CloudStorage / `.claude` never entered (prove it with a
+     planted repo in each).
+   - **(b) List-file merge.** Bare / `!` / `+` / `?` / `#` lines; user comments and
+     order preserved; atomic write; listed-but-missing warning.
+   - **(c) Prompts.** A non-terminal run never prompts (stdin `</dev/null` +
+     alarm); the mode prompt + remember; the startup menu; `--reset-choices`,
+     including its exit 2 without a terminal.
+   - **(d) Whole-tree copy.** The backup tarball includes `.git`, minus ignored
+     files; `restore.sh` extracts it; an OLD archive with no `repo-copies/` still
+     restores unchanged.
+   - **(e) Pre-ship.** The full fake-HOME end-to-end run from step 4.
+
+   Shell-suite adaptation of the playbook's "`pytest -rs`" rule: the receipt shows
+   each test script's ok/bad counts and confirms that no case was skipped or
+   short-circuited.
+
+   Commit.
 3. **Execute** the plan natively with `superpowers:executing-plans`, task by task,
-   with TDD and a progress line here after each task.
+   with TDD and a progress line here after each task. At each QC milestone, run
+   the playbook dispatch. Use an out-of-family reviewer, i.e. NOT GLM: pick the
+   strongest other free lane from `free-agent-tool.py --list`. Then:
+   - apply every proposed mutation and show its RED run line;
+   - restore, and confirm `git diff` is empty for the mutation;
+   - write the milestone receipt into §7.
+
+   Never start the next task with an open finding.
 4. Full gate: `tests/run-all.sh` all green, `backup.sh --help` shows the new flag,
    and a fake-HOME end-to-end run. The fake HOME holds:
    - a repo with a remote;
