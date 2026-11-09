@@ -76,10 +76,12 @@ else
   bad "prefix parse" "rc=$rc got: $(printf '%s' "$out" | tr '\n' '|')"
 fi
 
-# 2. `#` comments and blank lines are carried verbatim as comment state
-printf '# top\n\n   # indented\nalpha\n' > "$LIST"
+# 2. `#` comments and blank lines are carried verbatim as comment state — but a
+#    CRLF comment line must come back CR-FREE (pins the explicit CR strip: the
+#    whitespace trim alone would leave the CR in the verbatim payload)
+printf '# top\n\n   # indented\nalpha\n# tail\r\n' > "$LIST"
 out=$(_read_repo_list "$LIST")
-expected="$(printf 'comment\t# top\ncomment\t\ncomment\t   # indented\nrecord\talpha')"
+expected="$(printf 'comment\t# top\ncomment\t\ncomment\t   # indented\nrecord\talpha\ncomment\t# tail')"
 if [ "$out" = "$expected" ]; then
   ok "comments + blank lines carried verbatim as comment state"
 else

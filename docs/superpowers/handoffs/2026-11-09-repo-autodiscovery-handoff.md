@@ -227,3 +227,12 @@ tentative call. Do not stop for it.
   fired), `tests/run-all.sh` ALL SUITES PASSED rc 0 (14+9+9+3+36+33+14). Comment state
   carries verbatim lines per the ledger ruling (lossless rewrite, cmp-proven);
   atomic write proven by an inode-change case (temp+mv, not direct write).
+- 2026-11-09 ~18:3x — Task 2 discriminants, both shown RED then restored (git
+  status clean, backup cmp-identical): (1) CR-strip dropped → first SURVIVED
+  GREEN (the [[:space:]] trim absorbs a trailing CR on path lines), so the
+  suite was strengthened with a CRLF COMMENT line whose verbatim payload must
+  come back CR-free → mutation then RED (`FAIL comment state`, 13/1, rc 1);
+  (2) direct `> "$file"` instead of temp+mv → RED on the atomic case (inode
+  unchanged) AND on header-on-create (the redirect creates the target before
+  the `[ ! -e ]` test runs, suppressing the header — the temp name is what
+  keeps the check honest): `FAIL atomic write` + `FAIL header`, 12/2, rc 1.
