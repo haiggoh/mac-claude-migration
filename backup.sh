@@ -214,6 +214,82 @@ $newp
   return 0
 }
 
+# --- repo discovery (0.2.0) ------------------------------------------------------
+# Top-level dirs the archive captures WHOLESALE. This list is the single source
+# for two behaviours: the copy steps below iterate it (so a dir added here gets
+# copied), and discovery prunes it (so a repo inside one is never discovered —
+# it is either already in the archive or machine-local tool state). One list,
+# two consumers, no drift.
+CAPTURED_WHOLESALE=".claude .claude-flow .joyia .ssh"
+
+# Repo roots at depth <= 4 are found (their .git entry sits at <= 5). The
+# binding floor is a per-branch worktree pool nested two dirs deep (.git FILE
+# at depth 4); 5 keeps the real-home walk far under the ~10 s budget (measured
+# — see the handoff progress log). The limit lives INSIDE _discover_repos as a
+# local so the function is self-contained (tests extract it by range).
+
+_discover_repos() {  # print $HOME-relative repo roots, one per line
+  local hits hit root rel acc nested maxdepth=5
+  local -a prune=() accepted=() result=()
+  prune=( -path "$HOME/Library"          # covers CloudStorage, Mobile Documents, caches
+          -o -path "$HOME/Dropbox"
+          -o -path "$HOME/OneDrive"
+          -o -path "$HOME/.Trash"
+          -o -path "$HOME/.cache"
+          -o -path "$HOME/.npm"
+          -o -path "$HOME/.cargo"
+          -o -path "$HOME/.rustup"
+          -o -path "$HOME/go/pkg"
+          -o -path "$HOME/claude-migration"
+          -o -name node_modules          # name prunes apply at ANY depth
+          -o -name .venv
+          -o -name venv
+          -o -name __pycache__ )
+  for root in $CAPTURED_WHOLESALE; do prune+=(-o -path "$HOME/$root"); done
+  # A non-zero find (permission-denied subtrees are ordinary on a real home)
+  # must NOT discard the partial results: capture what was found, swallow rc.
+  hits="$(find "$HOME" -maxdepth "$maxdepth" \
+            \( "${prune[@]}" \) -prune -o -name .git -print 2>/dev/null)" || true
+  # A root is any dir holding .git — a DIRECTORY (normal repo) or a FILE
+  # (linked worktree). find's output is converted to $HOME-relative roots.
+  # $HOME itself is never a recorded root (recording it would overlay the
+  # whole home); anything not under $HOME is ignored as a guard.
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    root="${hit%/.git}"
+    [ "$root" = "$HOME" ] && continue
+    rel="${root#"$HOME"/}"
+    [ "$rel" = "$root" ] && continue
+    accepted+=("$rel")
+  done <<< "$hits"
+  # Nested suppression, order-independent: a root with an accepted ANCESTOR is
+  # a repo inside a repo (or a submodule) and is not listed separately. An
+  # order-dependent first-accept filter would leak when a descendant sorts
+  # before its ancestor (e.g. a repo dir named "*x" under C collation).
+  for rel in ${accepted[@]+"${accepted[@]}"}; do
+    nested=0
+    for acc in ${accepted[@]+"${accepted[@]}"}; do
+      [ "$acc" = "$rel" ] && continue
+      case "$rel" in "$acc"/*) nested=1; break ;; esac
+    done
+    [ "$nested" -eq 0 ] && result+=("$rel")
+  done
+  for rel in ${result[@]+"${result[@]}"}; do printf '%s\n' "$rel"; done
+  return 0
+}
+
+_repo_remote() {  # <abs-dir> — origin URL, else first remote URL, else empty
+  local url first
+  url="$(git -C "$1" remote get-url origin 2>/dev/null || true)"
+  if [ -n "$url" ]; then printf '%s\n' "$url"; return 0; fi
+  first="$(git -C "$1" remote 2>/dev/null | head -n 1)"
+  if [ -n "$first" ]; then
+    url="$(git -C "$1" remote get-url "$first" 2>/dev/null || true)"
+  fi
+  if [ -n "$url" ]; then printf '%s\n' "$url"; fi
+  return 0
+}
+
 # --list-destinations is a probe, like --dry-run: print the candidates and exit
 # BEFORE any work — no config parsing, no staging, nothing written.
 if [ "$LIST_DESTS" = 1 ]; then
@@ -342,8 +418,12 @@ copy_rel ".claude.json"
 for f in "$SRC"/.claude.json.bak*; do
   [ -e "$f" ] && ( cd "$SRC" && rsync -aR --no-specials --no-devices "$(basename "$f")" "$HOMEDIR/" )
 done
-copy_rel ".claude-flow"
-copy_rel ".joyia"                 # kept for reference; fresh joyia setup may overwrite
+# CAPTURED_WHOLESALE members are copied here (and pruned from discovery by the
+# same list): one entry added to the variable is both copied and never walked.
+for _cw in $CAPTURED_WHOLESALE; do
+  case "$_cw" in .claude|.ssh) continue ;; esac   # .claude: copied above, minus redownloadables; .ssh: secrets step below
+  copy_rel "$_cw"
+done
 copy_rel ".zshrc"
 copy_rel ".zshrc.backup"
 copy_rel ".gitconfig"
@@ -354,7 +434,7 @@ for f in ${EXTRA_FILES[@]+"${EXTRA_FILES[@]}"}; do copy_rel "$f"; done
 ########################################################################
 log "3/6  Secrets & credentials (⚠️ sensitive)"
 ########################################################################
-copy_rel ".ssh"
+copy_rel ".ssh"                   # CAPTURED_WHOLESALE member: discovery prunes it (already archived here)
 copy_rel ".api_keys"              # DIRECTORY: one bare-value secret per file (mode 600),
                                   # loaded by the ~/.zshrc filename->env-var loop.
                                   # rsync -a is recursive, so the whole dir comes along.

@@ -190,3 +190,10 @@ tentative call. Do not stop for it.
   brief verbatim; milestones (a)–(e); role filters dropped per user; self-review
   fallback named for lane outages). Self-reviewed: spec coverage, step scan, type
   consistency, review focus, proportion.
+- 2026-11-09 08:56 — Task 1 discovery walk: 33/33 new suite cases (RED first:
+  extraction barrier fired), run-all ALL SUITES PASSED (rc 0; 14+9+9+3+36+33),
+  real-HOME walk 1.57 s / 91 repo roots → maxdepth 5 stands (ledger ruling).
+  Mutation: dead Library prune → exactly 2 targeted REDs, byte-identical
+  restore (cmp). Notes: run-all invokes suites BY PATH, so a new suite needs
+  +x (the Write tool omits it); the first two receipts' rc readings came from
+  a grep pipe, not the suite — re-captured un-piped.

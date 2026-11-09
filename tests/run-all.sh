@@ -10,5 +10,6 @@ echo; echo "== capture shapes (file vs directory) ==";  "$HERE/test_capture_shap
 echo; echo "== portability (public-release contract) ==";  "$HERE/test_portability.sh"   || RC=1
 echo; echo "== branding (📦 banner + h1) ==";            "$HERE/test_branding.sh"      || RC=1
 echo; echo "== destinations (detection + --list-destinations) =="; "$HERE/test_destinations.sh" || RC=1
+echo; echo "== discovery (repo auto-discovery walk) ==";    "$HERE/test_discovery.sh"    || RC=1
 echo; [ $RC -eq 0 ] && echo "ALL SUITES PASSED" || echo "SOME SUITES FAILED"
 exit $RC
