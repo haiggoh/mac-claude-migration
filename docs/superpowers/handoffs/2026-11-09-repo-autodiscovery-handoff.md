@@ -184,3 +184,9 @@ tentative call. Do not stop for it.
   filters dropped for this session (user, 03:42); identity confirmed from the session
   envelope (z-ai/glm-5.3-flash), trailer taken from the attribution table since the
   project memory dir is empty (GLM 5.3 Flash).
+- 2026-11-09 04:0x — §5.2 plan written with superpowers:writing-plans +
+  run-to-completion:writing-execution-plans (authority matrix, Phase 0, receipts,
+  discriminants) and the REQUIRED milestone-QC section (playbook standing rule +
+  brief verbatim; milestones (a)–(e); role filters dropped per user; self-review
+  fallback named for lane outages). Self-reviewed: spec coverage, step scan, type
+  consistency, review focus, proportion.
