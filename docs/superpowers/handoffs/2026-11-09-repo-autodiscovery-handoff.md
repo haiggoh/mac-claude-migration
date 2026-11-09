@@ -246,3 +246,17 @@ tentative call. Do not stop for it.
   repos leaked into the "recorded" count (REPOS/COPIES now filter via
   `_merge_in_missing`; the file line and warn are kept). Non-terminal proof:
   stdin </dev/null + perl alarm, rc 0.
+- 2026-11-09 ~21:5x — QC milestone (b) DISPATCH SUCCEEDED (lanes recovered):
+  gemini-3.8-flash via remote gemini (out-of-family, avoid_family=zhipu honoured);
+  verdict table 18 PROVEN / 2 WEAK / 0 UNPROVEN. Every mutation it proposed for a
+  PROVEN row was already covered (e.g. -type d -name .git, unconditional write,
+  -d vs -e in merge). The 2 WEAK findings FIXED and mutation-proven:
+  (1) header CONTENT unasserted → test_repo_list case 6 now greps the header for
+  --reset-choices and the !/+/? prefix lines; (2) warning gate listed==0 half
+  untested → new test_flow case 6 (list holds only a missing `!gone` entry,
+  0 repos on disk): warning suppressed, line kept, file untouched; the
+  reviewer's own mutation (drop `&& [ "$_n_listed" -eq 0 ]`) now goes RED
+  (`FAIL warning gate`, 7/1) then restored → green. This dispatch also covers
+  milestone (a)'s pending rerun — its requirements (items 1–4: worktree .git
+  file, nested suppression, per-prune cases with controls, depth boundary) all
+  PROVEN. Suites after fixes: repo_list 14/14, flow 8/8.

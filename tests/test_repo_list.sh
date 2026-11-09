@@ -127,10 +127,13 @@ _write_repo_list "$OUT3" "$(printf 'record\ta\n')"
 n1=$(grep -c '^# Repo list for backup.sh' "$OUT3")
 _write_repo_list "$OUT3" "$(_read_repo_list "$OUT3")$(printf '\nrecord\tb')"
 n2=$(grep -c '^# Repo list for backup.sh' "$OUT3")
-if [ "$n1" -eq 1 ] && [ "$n2" -eq 1 ]; then
-  ok "header prepended on create, not duplicated on rewrite"
+if [ "$n1" -eq 1 ] && [ "$n2" -eq 1 ] \
+   && grep -q 'backup.sh --reset-choices' "$OUT3" \
+   && grep -q '^#   !path' "$OUT3" && grep -q '^#   +path' "$OUT3" \
+   && grep -q '^#   ?path' "$OUT3"; then
+  ok "header prepended on create, not duplicated on rewrite, documents prefixes + both resets"
 else
-  bad "header" "after create: $n1, after rewrite: $n2"
+  bad "header" "after create: $n1, after rewrite: $n2, content: $(head -3 "$OUT3" | tr '\n' '|')"
 fi
 
 # 7. user comments and line order survive a rewrite byte-identically

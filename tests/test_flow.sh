@@ -163,5 +163,19 @@ else
   bad "empty HOME" "rc=$rc arch=${arch:+yes} out=$(printf '%s' "$out" | tail -3 | tr '\n' '|')"
 fi
 
+# 6. zero repos on disk but a non-empty list (only a missing excluded entry):
+#    the no-repos warning must NOT fire — it needs discovery=0 AND list empty
+fresh
+printf '!gone\n' > "$FAKE/.claude-migration-repos"
+out=$(run_backup "$FAKE" "$OUT"); rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! printf '%s' "$out" | grep -q 'no repos discovered' \
+   && printf '%s' "$out" | grep -q 'repos: 0 recorded, 0 copied whole, 1 excluded, 0 undecided, 1 missing' \
+   && grep -Fqx '!gone' "$FAKE/.claude-migration-repos"; then
+  ok "list non-empty (only missing ! entry): warning suppressed, line kept, file untouched"
+else
+  bad "warning gate" "rc=$rc list=$(tr '\n' '|' < "$FAKE/.claude-migration-repos" 2>/dev/null) out=$(printf '%s' "$out" | grep -a 'repos\|no repos' | tr '\n' '|')"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
