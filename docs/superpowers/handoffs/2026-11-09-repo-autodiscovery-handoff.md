@@ -21,7 +21,9 @@ or timeouts, that is upstream, not a bug to diagnose.
 
 - Repo: `~/ClaudeWorkspace/mac-claude-migration` (mcm). Branch:
   **`feat/repo-autodiscovery`**, cut from `main` @ `4a9bb4f` (0.1.5).
-- This branch has one commit: this handoff + the design doc (see `git log -1`).
+- Branch commits (2026-11-09): `49636c2` (this doc + §5 amendment), `819ad6c`
+  (design doc + builder-check self-review), `7f93da5` (implementation plan),
+  `01ba1f6` (plan Task 1: discovery engine, 33/33 tests). Working tree clean.
 - Baseline tests, run 2026-11-09 under `/bin/bash` (3.2), all PASS:
   - `test_branding` 3
   - `test_capture_shapes` 10
@@ -197,3 +199,25 @@ tentative call. Do not stop for it.
   restore (cmp). Notes: run-all invokes suites BY PATH, so a new suite needs
   +x (the Write tool omits it); the first two receipts' rc readings came from
   a grep pipe, not the suite — re-captured un-piped.
+- 2026-11-09 ~12:35 — QC milestone (a) dispatch: every remote lane timed out
+  again (Gemini read-timeout, Mistral 900 s budget), then the dispatch CRASHED
+  in the tool itself: the no-role run reaches a `remote openrouter` fallback
+  entry whose `timeout` is null → `entry.get("timeout", 1800)` returns None →
+  `TypeError: min(None, int)` at `free-agents/bin/free-agent-tool.py:586`
+  (waypoint filed 🧭). Per rule 5 the milestone got a DOCUMENTED SELF-REVIEW
+  instead: every discovery case carries a positive control (a control repo
+  found in the same run) except pure-empty cases, which are gated by the
+  suite-level extraction barrier; the semantic Library-prune mutation above
+  is the discriminant receipt (2 targeted REDs, cmp-verified restore). Verdict:
+  milestone (a) PROVEN by suite + mutation; an independent dispatch verdict
+  was UNAVAILABLE (lanes down + tool bug) — rerun one dispatch when lanes
+  recover, before relying on the milestone.
+- 2026-11-09 ~14:57 — handed over AGAIN at the user's request
+  (`/free-agents:free-session-handover max effort`): successor launched on
+  `nvidia-glm53` @ max effort with this doc as the initial prompt; this session
+  (A) deliberately NOT stopped (rule 7 — never kill the band). Position at
+  handover: Task 1 complete @ `01ba1f6`; plan Task 2 (list-file I/O + merge)
+  is next — its failing tests are NOT yet written; one ruling is ledgered in
+  `.superpowers/sdd/2026-11-09-repo-autodiscovery/progress.md` (git-ignored but
+  on disk: read it first — `_read_repo_list` gains a `comment` state so user
+  comments survive rewrites). Secret scan of all touched files: clean (0/6).
