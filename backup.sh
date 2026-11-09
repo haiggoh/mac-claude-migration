@@ -379,6 +379,14 @@ _merge_decided() {  # _merge_decided <path> — rc 0 when the path is already de
   return 1
 }
 
+_merge_in_missing() {  # _merge_in_missing <path> — rc 0 when listed but not on disk
+  local p="$1" x
+  for x in ${MISSING[@]+"${MISSING[@]}"}; do
+    [ "$x" = "$p" ] && return 0
+  done
+  return 1
+}
+
 _merge_repos() {  # stdin: state<TAB>payload lines (from _read_repo_list); args: discovered rel paths
   # Sets DECIDED_RECORD/EXCLUDE/COPY/UNDECIDED, NEW_REMOTE, NEW_NOREMOTE, MISSING,
   # MERGE_LINES (the read lines in order, for a lossless rewrite).
@@ -411,7 +419,8 @@ _merge_repos() {  # stdin: state<TAB>payload lines (from _read_repo_list); args:
     [ -n "$d" ] || continue
     _merge_decided "$d" && continue
     url=""
-    if [ -d "$HOME/$d/.git" ]; then url="$(_repo_remote "$HOME/$d")"; fi
+    # .git as FILE = linked worktree — still a repo root with the shared remotes
+    if [ -e "$HOME/$d/.git" ]; then url="$(_repo_remote "$HOME/$d")"; fi
     if [ -n "$url" ]; then NEW_REMOTE+=("$d"); else NEW_NOREMOTE+=("$d"); fi
   done
   return 0
@@ -460,13 +469,53 @@ fi
 #   MIGRATION_REPOS / ~/.claude-migration-repos        git repos to record
 #   MIGRATION_EXTRA_FILES / ~/.claude-migration-extra-files   extra files to capture
 REPOS=()
+COPIES=()
+LISTFILE="$SRC/.claude-migration-repos"
 if [ -n "${MIGRATION_REPOS:-}" ]; then
+  # MIGRATION_REPOS overrides everything: no discovery, no prompts, no file
+  # writes — exactly the pre-0.2.0 behaviour.
   IFS=: read -ra REPOS <<< "$MIGRATION_REPOS"
-elif [ -f "$SRC/.claude-migration-repos" ]; then
-  while IFS= read -r r; do case "$r" in ''|'#'*) continue ;; esac; REPOS+=("$r"); done \
-    < "$SRC/.claude-migration-repos"
+else
+  # 0.2.0: the list file is built by discovery + merge (functions above).
+  # Interactive prompts land in Task 4; this flow treats every run as
+  # automatic and parks no-remote repos as `?` lines.
+  DISCOVERED=()
+  while IFS= read -r _d; do [ -n "$_d" ] && DISCOVERED+=("$_d"); done <<< "$(_discover_repos)"
+  _merge_repos ${DISCOVERED[@]+"${DISCOVERED[@]}"} < <(_read_repo_list "$LISTFILE")
+  # REPOS/COPIES carry only on-disk repos — a listed-but-missing path keeps its
+  # line in the file (MERGE_LINES) and its warn, but is not "recorded".
+  for _r in ${DECIDED_RECORD[@]+"${DECIDED_RECORD[@]}"}; do
+    _merge_in_missing "$_r" || REPOS+=("$_r")
+  done
+  for _r in ${DECIDED_COPY[@]+"${DECIDED_COPY[@]}"}; do
+    _merge_in_missing "$_r" || COPIES+=("$_r")
+  done
+  _appended=0
+  for _r in ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"}; do
+    REPOS+=("$_r"); MERGE_LINES+=("record"$'\t'"$_r"); _appended=1
+  done
+  for _r in ${NEW_NOREMOTE[@]+"${NEW_NOREMOTE[@]}"}; do
+    MERGE_LINES+=("undecided"$'\t'"$_r"); _appended=1
+  done
+  # Write the list file only when something changed (idempotent re-runs rewrite
+  # nothing) and NEVER on --dry-run (a dry run writes nothing, ever).
+  if [ "$_appended" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+    _merged=""
+    for _l in ${MERGE_LINES[@]+"${MERGE_LINES[@]}"}; do _merged="${_merged}${_merged:+$'\n'}$_l"; done
+    if [ -n "$_merged" ]; then _write_repo_list "$LISTFILE" "$_merged"; fi
+  fi
+  _n_listed=$(( ${#DECIDED_RECORD[@]} + ${#DECIDED_EXCLUDE[@]} + ${#DECIDED_COPY[@]} + ${#DECIDED_UNDECIDED[@]} ))
+  if [ "${#DISCOVERED[@]}" -eq 0 ] && [ "$_n_listed" -eq 0 ]; then
+    warn "no repos discovered under \$HOME and no list file — recording none"
+  fi
+  _n_und=$(( ${#DECIDED_UNDECIDED[@]} + ${#NEW_NOREMOTE[@]} ))
+  log "repos: ${#REPOS[@]} recorded, ${#COPIES[@]} copied whole, ${#DECIDED_EXCLUDE[@]} excluded, $_n_und undecided, ${#MISSING[@]} missing"
+  if [ "$_n_und" -gt 0 ]; then
+    for _r in ${DECIDED_UNDECIDED[@]+"${DECIDED_UNDECIDED[@]}"} ${NEW_NOREMOTE[@]+"${NEW_NOREMOTE[@]}"}; do
+      warn "  undecided (no remote): $_r"
+    done
+  fi
 fi
-[ "${#REPOS[@]}" -eq 0 ] && warn "no repos configured (MIGRATION_REPOS / ~/.claude-migration-repos) — recording none"
 EXTRA_FILES=()
 if [ -n "${MIGRATION_EXTRA_FILES:-}" ]; then
   IFS=: read -ra EXTRA_FILES <<< "$MIGRATION_EXTRA_FILES"
@@ -586,13 +635,16 @@ log "4/6  Git repos → record remote + exact commit + uncommitted overlay"
 # (so you land on the same commit, not upstream HEAD), then applies an overlay
 # of your uncommitted/untracked files (respecting .gitignore, so venvs are
 # excluded automatically). This is "download from public source + zero gap".
-# Repos were configured up top (MIGRATION_REPOS / ~/.claude-migration-repos).
+# Repos were set up top (MIGRATION_REPOS, or discovered + merged into
+# ~/.claude-migration-repos). COPIES (`+` lines) get a whole-tree tarball in
+# Task 5; their repos.tsv row with an empty URL lands there too.
 : > "$STAGE/repos.tsv"   # path<TAB>url<TAB>branch<TAB>sha
 # bash-3.2 + set -u: an empty REPOS array must not crash here (the ${var+...} guard
 # keeps the expansion empty instead of raising "unbound variable").
 for rel in ${REPOS[@]+"${REPOS[@]}"}; do
   d="$SRC/$rel"
-  [ -d "$d/.git" ] || { warn "not a git repo, skipping repo-mode: $rel"; continue; }
+  # .git may be a DIRECTORY (normal repo) or a FILE (linked worktree) — both are roots
+  [ -e "$d/.git" ] || { warn "not a git repo, skipping repo-mode: $rel"; continue; }
   url="$(git -C "$d" remote get-url origin 2>/dev/null || echo '')"
   sha="$(git -C "$d" rev-parse HEAD 2>/dev/null || echo '')"
   branch="$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'HEAD')"

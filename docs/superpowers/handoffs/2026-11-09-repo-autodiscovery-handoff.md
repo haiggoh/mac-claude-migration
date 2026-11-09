@@ -236,3 +236,13 @@ tentative call. Do not stop for it.
   unchanged) AND on header-on-create (the redirect creates the target before
   the `[ ! -e ]` test runs, suppressing the header — the temp name is what
   keeps the check honest): `FAIL atomic write` + `FAIL header`, 12/2, rc 1.
+- 2026-11-09 ~19:2x — Task 3 flow wiring complete: old repos block replaced by
+  discovery→merge→append→write-if-changed→summary (MIGRATION_REPOS keeps old
+  verbatim behaviour; dry-run never writes; interim treats all runs as automatic
+  and parks no-remote repos as `?`); portability case 4 updated to the sanctioned
+  `repos:` summary assertion; `tests/test_flow.sh` 7/7 (RED first: 1/6 on old
+  code). Two real bugs caught mid-task: `[ -d .git ]` rejects worktree FILEs in
+  BOTH the merge and the git-loop guard (→ `[ -e ]`), and listed-but-missing
+  repos leaked into the "recorded" count (REPOS/COPIES now filter via
+  `_merge_in_missing`; the file line and warn are kept). Non-terminal proof:
+  stdin </dev/null + perl alarm, rc 0.

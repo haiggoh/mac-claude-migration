@@ -12,5 +12,6 @@ echo; echo "== branding (📦 banner + h1) ==";            "$HERE/test_branding.
 echo; echo "== destinations (detection + --list-destinations) =="; "$HERE/test_destinations.sh" || RC=1
 echo; echo "== discovery (repo auto-discovery walk) ==";    "$HERE/test_discovery.sh"    || RC=1
 echo; echo "== repo list (list-file I/O + merge) ==";       "$HERE/test_repo_list.sh"    || RC=1
+echo; echo "== flow (discovery wired into the run) ==";      "$HERE/test_flow.sh"         || RC=1
 echo; [ $RC -eq 0 ] && echo "ALL SUITES PASSED" || echo "SOME SUITES FAILED"
 exit $RC

@@ -38,8 +38,11 @@ if out=$(env -u MIGRATION_REPOS -u MIGRATION_EXTRA_FILES HOME="$SENT" "$ROOT/bac
     || bad "fresh-machine --dry-run" "no DRY RUN banner"
   [ -e "$SENT" ] && bad "fresh-machine --dry-run" "wrote under the fake HOME" \
     || ok "fresh-machine --dry-run writes nothing"
-  printf '%s' "$out" | grep -qi 'no repos configured' && ok "warns when no repos configured" \
-    || bad "fresh-machine --dry-run" "missing the no-repos warning"
+  # 0.2.0 sanctioned change: discovery runs on a fresh machine, so the pinned
+  # `repos:` summary replaces the old "no repos configured" warning assertion
+  printf '%s' "$out" | grep -q 'repos: 0 recorded, 0 copied whole, 0 excluded, 0 undecided, 0 missing' \
+    && ok "fresh-machine --dry-run prints the discovery summary" \
+    || bad "fresh-machine --dry-run" "missing the repos: summary"
 else
   bad "fresh-machine --dry-run" "exited non-zero"
 fi
