@@ -6,3 +6,6 @@ __pycache__/
 *.tar.gz
 *.tgz
 *.zip
+
+# pty-suite scratch output (tests/test_destinations.sh, tests/test_prompts.sh)
+tests/.tmp-*.out
