@@ -21,8 +21,12 @@
 #       to $HOME — or one per line in ~/.claude-migration-repos
 #   MIGRATION_EXTRA_FILES="projects/notes.md"        extra files to capture,
 #       same syntax — or one per line in ~/.claude-migration-extra-files
-#   Unset = no repos/extra files recorded (warned below): a fresh machine decides
-#   what to carry. The source user/home are recorded in meta.env so restore.sh
+#   Unset MIGRATION_REPOS = repos are DISCOVERED automatically (0.2.0): $HOME is
+#   scanned (pruned), found repos merge into ~/.claude-migration-repos (prefixes:
+#   bare = record, ! = exclude, + = copy whole, ? = undecided), and anything mcm
+#   cannot decide alone is asked once and remembered (--reset-choices or the
+#   startup menu undo that).
+#   The source user/home are recorded in meta.env so restore.sh
 #   can rewrite absolute-path symlinks on a machine with a different username.
 #
 # Usage: bash backup.sh            # interactive on a terminal: destination menu,
