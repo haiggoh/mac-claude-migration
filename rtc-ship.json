@@ -1,0 +1,13 @@
+{
+  "_comment": "How rtc-ship.sh ships THIS repo (run-to-completion's bin/rtc-ship.sh). Data lives here; commands a repo needs live in .rtc/*.sh, opt-in by presence. Adding this file is config-only: no version bump, no release. Plain repo (no .claude-plugin): the version lives in VERSION, there is no plugin to refresh and no release assets — the Homebrew tap (haiggoh/homebrew-tap, hourly bump-formulas) picks up each new tag/release.",
+  "tag_prefix": "v",
+  "default_branch": "main",
+  "manifest": "",
+  "changelog": "CHANGELOG.md",
+  "version_file": "VERSION",
+  "roadmap": "",
+  "assets": "",
+  "refresh_plugin": "",
+  "test_cmd": "/bin/bash tests/run-all.sh",
+  "require_default_branch_checkout": true
+}

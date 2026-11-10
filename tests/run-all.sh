@@ -9,6 +9,7 @@ echo "== CLI contract (args parsed before work) =="; "$HERE/test_cli_contract.sh
 echo; echo "== capture shapes (file vs directory) ==";  "$HERE/test_capture_shapes.sh" || RC=1
 echo; echo "== portability (public-release contract) ==";  "$HERE/test_portability.sh"   || RC=1
 echo; echo "== branding (📦 banner + h1) ==";            "$HERE/test_branding.sh"      || RC=1
+echo; echo "== version consistency (VERSION == CHANGELOG top) =="; "$HERE/test_version_consistency.sh" || RC=1
 echo; echo "== destinations (detection + --list-destinations) =="; "$HERE/test_destinations.sh" || RC=1
 echo; echo "== discovery (repo auto-discovery walk) ==";    "$HERE/test_discovery.sh"    || RC=1
 echo; echo "== repo list (list-file I/O + merge) ==";       "$HERE/test_repo_list.sh"    || RC=1
