@@ -225,12 +225,15 @@ fi
 fresh
 printf 'repo_mode=auto\n' > "$PREFS"
 printf '!x\n' > "$LIST"
+cp "$PREFS" "$FAKE/prefs.orig"; cp "$LIST" "$FAKE/list.orig"
 out=$(run_plain "$FAKE" "$OUT" --reset-choices); RC=$?
 if [ "$RC" -eq 2 ] \
    && printf '%s' "$out" | grep -qi 'terminal' \
    && grep -q '^repo_mode=auto$' "$PREFS" \
-   && grep -Fqx '!x' "$LIST"; then
-  ok "--reset-choices non-terminal: rc 2 + message, prefs and list untouched"
+   && grep -Fqx '!x' "$LIST" \
+   && cmp -s "$PREFS" "$FAKE/prefs.orig" \
+   && cmp -s "$LIST" "$FAKE/list.orig"; then
+  ok "--reset-choices non-terminal: rc 2 + message, prefs and list byte-untouched"
 else
   bad "reset non-terminal" "RC=$RC out=$(printf '%s' "$out" | head -2 | tr '\n' '|')"
 fi
