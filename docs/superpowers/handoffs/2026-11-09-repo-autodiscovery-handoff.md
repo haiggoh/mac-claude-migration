@@ -321,3 +321,13 @@ tentative call. Do not stop for it.
   green before push (ALL SUITES PASSED, 10 suites). STOPPED here per rule 3 —
   no merge, no tag, no release, no tap bump (separate repo). Plan COMPLETE:
   all 6 tasks + QC milestones (a),(b) + adversarial review done.
+- 2026-11-10 ~13:4x — QC milestones (c)(d)(e): the out-of-family dispatch HUNG
+  (gemini 503 → Mistral Large 4 stuck >30 min, no fall-over), so per handoff
+  rule 5 the milestone got a DOCUMENTED SELF-REVIEW instead. Verdict: (d) and
+  (e) PROVEN by their suites (repo_copies 7/7 incl. old-archive + tracked-.venv
+  + space paths; e2e 7/7 incl. TOOL_VERSION pin + restore-at-SHA). (c) had ONE
+  gap the review caught: no test pinned that startup-menu "change" (2/c)
+  re-decides an EXCLUDED repo (only re-scan 3/r was pinned) → added
+  test_prompts case 18 (passes: change filter drops ! lines, auto re-records
+  bare) → prompts 22/22. An independent dispatch verdict for (c)(d)(e) was
+  UNAVAILABLE (lanes down again) — rerun one dispatch when lanes recover.

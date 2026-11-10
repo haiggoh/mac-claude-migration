@@ -327,5 +327,22 @@ else
   bad "pty dry-run no-prompt" "RC=$RC out=$(menu_out | grep -aE '📦|DRY|aborted' | head -3 | tr '\n' '|')"
 fi
 
+# 18. startup menu "change" (2/c) re-decides an EXCLUDED repo: filter drops the !
+#     line, the repo comes back as new, auto mode re-records it bare
+fresh
+mkrepo "$FAKE/x" "https://example.com/x.git"
+printf '!x\n' > "$LIST"
+printf 'repo_mode=review\n' > "$PREFS"
+RC=0; run_pty "$FAKE" "$OUT" "2" "2" "n" || RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -q 'Remembered choices' \
+   && menu_out | grep -q 'How should I record' \
+   && grep -Fqx 'x' "$LIST" \
+   && ! grep -Fqx '!x' "$LIST"; then
+  ok "startup menu change: mode re-asked AND excluded repo re-offered (bare, ! gone)"
+else
+  bad "change re-decides" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
