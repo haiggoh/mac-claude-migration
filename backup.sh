@@ -991,6 +991,37 @@ for rel in ${REPOS[@]+"${REPOS[@]}"}; do
   [ "$unpushed" != "0" ] && warn "  $rel has $unpushed UNPUSHED commit(s) — push them before migrating!"
 done
 
+# Whole-tree copies (`+` lines, 0.2.0): repos the user chose to copy whole —
+# typically no-remote repos a clone could never bring back. Archived under
+# repo-copies/<safe>.tar.gz (safe = tr / __): tracked + untracked files
+# (gitignore-respected) PLUS the .git tree so the history comes along; the
+# overlay's extra greps still apply, so a tracked node_modules cannot bloat it.
+# The repos.tsv row carries an EMPTY URL — restore.sh extracts the tarball when
+# it is present and keeps the "no remote" warning when it is not (old archives).
+mkdir -p "$STAGE/repo-copies"
+for rel in ${COPIES[@]+"${COPIES[@]}"}; do
+  d="$SRC/$rel"
+  [ -e "$d/.git" ] || { warn "not a git repo, skipping copy: $rel"; continue; }
+  if [ -f "$d/.git" ]; then
+    warn "  $rel is a linked worktree — its .git points into its main checkout; the copy may not be self-contained"
+  fi
+  safe="$(printf '%s' "$rel" | tr '/' '__')"
+  sha="$(git -C "$d" rev-parse HEAD 2>/dev/null || echo '')"
+  branch="$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'HEAD')"
+  printf '%s\t\t%s\t%s\n' "$rel" "$branch" "$sha" >> "$STAGE/repos.tsv"   # empty URL field
+  ( cd "$d"
+    { git -c core.quotepath=false ls-files -z -c -o --exclude-standard
+      find .git -type f -print0
+    } | tr '\0' '\n' \
+      | grep -vE '(^|/)(\.venv|venv|node_modules|__pycache__)/' \
+      | grep -vE '(^|/)\.DS_Store$' \
+      | grep -v '^$' > "$STAGE/repo-copies/$safe.filelist" || true
+    if [ -s "$STAGE/repo-copies/$safe.filelist" ]; then
+      tar czf "$STAGE/repo-copies/$safe.tar.gz" -C "$d" -T "$STAGE/repo-copies/$safe.filelist"
+      echo "    whole-tree copy: $rel ($(wc -l < "$STAGE/repo-copies/$safe.filelist" | tr -d ' ') file(s) incl. .git)"
+    fi )
+done
+
 ########################################################################
 log "5/6  Reinstall manifests (public toolchain — recorded, not packaged)"
 ########################################################################
@@ -1039,6 +1070,10 @@ payloads are reinstalled.
   2026-09-14 by replaying the real rsync leg.)
 - `repos.tsv` + `repo-overlays/` — git repos: exact remote+commit, plus your
                              uncommitted/untracked files to re-apply after clone.
+- `repo-copies/`           — whole-tree copies (incl. `.git`) of no-remote repos
+                             the user chose to copy (`+` lines in the list);
+                             restore.sh extracts them when repos.tsv has an
+                             empty URL for the row.
 - `Brewfile`, `pipx-list.txt`, `claude-version.txt`, plugin manifests — reinstall inputs.
 
 ## Reinstalled by restore.sh (NOT packaged — public sources)

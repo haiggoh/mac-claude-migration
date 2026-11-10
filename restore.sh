@@ -114,9 +114,41 @@ warn "Skipped ~/.joyia/ — your existing joyia config was left untouched."
 log "3/7  Clone git repos → exact commit → apply overlay"
 ########################################################################
 if [ -f "$STAGE/repos.tsv" ]; then
-  while IFS=$'\t' read -r rel url branch sha; do
-    [ -n "$url" ] || { warn "no remote for $rel — skipping"; continue; }
+  # Fields are split MANUALLY, not with IFS=$'\t' read: tab is IFS whitespace, so
+  # consecutive tabs collapse and an EMPTY URL field would shift every later
+  # field left (a no-remote row read url=branch — "git clone master proj").
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    rel="${line%%$'\t'*}"
+    rest=""
+    if [ "$rel" != "$line" ]; then rest="${line#*$'\t'}"; fi
+    url="${rest%%$'\t'*}"
+    branch=""; sha=""
+    if [ "$url" != "$rest" ]; then
+      rest="${rest#*$'\t'}"
+      branch="${rest%%$'\t'*}"
+      if [ "$branch" != "$rest" ]; then sha="${rest#*$'\t'}"; fi
+    fi
     dest="$HOME/$rel"
+    if [ -z "$url" ]; then
+      # Empty URL: a whole-tree copy (0.2.0) — extract the tarball when present.
+      # Old archives have no repo-copies/ dir, so those rows keep the
+      # "no remote" warning, which is what makes them restore unchanged.
+      safe="$(echo "$rel" | tr '/' '__')"
+      if [ -f "$STAGE/repo-copies/$safe.tar.gz" ]; then
+        if [ -e "$dest" ]; then
+          warn "destination exists, skipping extraction: $rel"
+        else
+          mkdir -p "$dest"   # bsdtar -C needs the target dir to exist (clone path creates its own)
+          log "extract whole-tree copy → $rel"
+          tar xzf "$STAGE/repo-copies/$safe.tar.gz" -C "$dest"
+          ok "copied repo restored: $rel (with .git)"
+        fi
+      else
+        warn "no remote for $rel — skipping"
+      fi
+      continue
+    fi
     if [ -d "$dest/.git" ]; then
       ok "exists, skipping clone: $rel"
     else

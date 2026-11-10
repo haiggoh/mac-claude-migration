@@ -275,3 +275,19 @@ tentative call. Do not stop for it.
   _WRITE_MODE subshell loss (remember=y never wrote prefs) — pref write moved
   into _ask_repo_mode. Discriminant: terminal-gate dropped from the mode-prompt
   path → non-terminal proof RED (rc 1 via EOF abort, 18/2) → restored.
+- 2026-11-10 ~04:4x — Task 5 whole-tree copies implemented (backup copy loop +
+  repos.tsv empty-URL rows + MANIFEST line; restore extraction branch with
+  dest-exists skip; `tests/test_repo_copies.sh` 7/7, RED first 0/7). BOTH
+  discriminants shown RED then restored: .git tree dropped → copy-tarball +
+  restore cases RED (4/3); dest-exists check dropped → skip case RED (6/1,
+  sentinel clobbered). PRE-EXISTING 0.1.5 DEFECT found + fixed by the
+  old-archive case: `IFS=$'\t' read` collapsed consecutive tabs so an
+  empty-URL row read url=branch → "git clone master proj"; restore now splits
+  TSV fields manually. Also: bsdtar -C needs the target dir to exist; tr is
+  1:1 (a/b→a_b, same as 0.1.x overlays). **CHECKPOINT — wrap requested
+  mid-task:** suite receipts all in (repo-copies 7/7; full gate re-run ALL
+  SUITES PASSED rc 0, 14+9+9+36+33+14+8+20+7) but Task 6 is NOT started.
+  Next session must (1) Task 6 (VERSION 0.2.0 + CHANGELOG + README +
+  tests/test_e2e.sh + full gate + `grep -rn 0\.1\.5`), (2) push the branch
+  (gated on the full gate), never merge/tag/release. Worktree `+` copies warn
+  that their .git file points into the main checkout (documented limitation).
