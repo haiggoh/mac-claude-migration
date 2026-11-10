@@ -305,3 +305,14 @@ tentative call. Do not stop for it.
   VERSION/CHANGELOG still consistently 0.1.5 (Task 6 pending by design);
   the --help header's stale "warned below" line fixed (bad741f). Fresh
   full gate on the final tree: see final commit.
+- 2026-11-10 ~12:3x — Task 6 complete: VERSION 0.2.0 + CHANGELOG top entry +
+  README repo-discovery section (auto-discovery, prefixes, both reset ways,
+  --reset-choices) + tests/test_e2e.sh (five-part fake HOME: run 1 non-terminal
+  bare/?/pruned-absent + TOOL_VERSION=0.2.0 pin (RED until the bump), run 2 pty
+  with seeded +/! lines → copy tarball + remembered-choices line, restore →
+  clone at recorded SHA + extraction with .git + excluded absent). Discriminant:
+  VERSION reverted to 0.1.5 → portability case 2 RED → restored. Full gate with
+  10 suites: see the Task 6 commit. Then push the branch (gated on green) and
+  STOP — no merge/tag/release (rule 3). One observed flake: a single e2e run-2
+  pty failure before the 1.5 s pacing hardening; 3 subsequent runs 7/7 (pacing
+  now matches the measured test_destinations pattern).

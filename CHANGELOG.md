@@ -6,6 +6,54 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.2.0] — 2026-11-10
+
+### Added — repo auto-discovery (user spec, 2026-11-09)
+
+- With `MIGRATION_REPOS` unset, `backup.sh` now builds its repo list itself: it scans
+  `$HOME` (pruned: `~/Library`, cloud dirs, caches, `node_modules`/`.venv`/`venv`/
+  `__pycache__`, the default output dir, and everything the archive already captures
+  wholesale), finds every repo root (`.git` directory OR linked-worktree file, depth
+  ≤ 4, nested repos suppressed), and merges the result with
+  `~/.claude-migration-repos`. A user who just presses Enter gets every repo they
+  work in.
+- List-file line prefixes: bare = record, `!` = excluded (never offered again),
+  `+` = copy the whole tree (incl. `.git`) into `repo-copies/`, `?` = undecided
+  (parked by a non-terminal run, asked on the next terminal run), `#` = comment.
+  Writes are atomic (temp + `mv`); user comments and line order are preserved.
+- Terminal runs ask only what mcm cannot decide alone, and remember every answer:
+  a startup menu (carry on / change / re-scan from scratch), a review-vs-automatic
+  mode prompt (remembered in `~/.claude-migration-prefs`), a pre-ticked review list
+  (toggle by number, `a`/`n`, Enter), and a per-repo menu for no-remote repos that
+  shows the size the copy would add. Non-terminal runs never prompt (EOF aborts
+  like `q`).
+- `--reset-choices` forgets the remembered answers and re-asks on that run (needs a
+  terminal; exit 2 without one; announces only under `--dry-run`). The same reset is
+  reachable from the startup menu. `--dry-run` runs discovery + merge and prints the
+  pinned summary but never prompts and writes nothing.
+- Run summary line: `repos: N recorded, N copied whole, N excluded, N undecided,
+  N missing` (undecided/missing named on following warn lines).
+- `restore.sh`: a `repos.tsv` row with an empty URL *and* a matching `repo-copies/`
+  tarball is extracted to `$HOME/<path>` (skipped with a message when the destination
+  already exists). Rows without a tarball keep the old "no remote — skipping"
+  warning, so pre-0.2.0 archives restore unchanged.
+
+### Fixed
+
+- Pre-existing 0.1.5 defect exposed by the new old-archive test: `restore.sh` read
+  `repos.tsv` with `IFS=$'\t' read`, which collapses consecutive tabs — an empty-URL
+  row shifted every later field left and read `url=branch` ("git clone master
+  proj"). Fields are now split manually.
+
+### Tests
+
+- 9 suites, `tests/run-all.sh` → ALL SUITES PASSED, all hermetic (fake HOMEs, local
+  remotes, stubbed brew/pipx, pty with paced keys): + `test_discovery` (33),
+  `test_repo_list` (14), `test_flow` (8), `test_prompts` (21), `test_repo_copies`
+  (7), `test_e2e` (7). Every task mutation-checked (RED line shown, then restored);
+  QC milestones (a)+(b) reviewed by an out-of-family dispatch (18 PROVEN / 2 WEAK,
+  both fixed with mutation proof).
+
 ## [0.1.5] — 2026-11-08
 
 ### Added — 🍺 Homebrew install

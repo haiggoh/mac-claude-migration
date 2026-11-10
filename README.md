@@ -79,19 +79,38 @@ Both suites were **mutation-tested**: run against the pre-fix scripts they repor
 
 ## Configure what gets captured (per machine)
 
-The repo list and extra files are **not** hardcoded. On the source Mac, either:
+Extra files are **not** hardcoded:
 
 ```sh
-export MIGRATION_REPOS="projects/my-app:servers/my-mcp"   # colon-separated, relative to $HOME
 export MIGRATION_EXTRA_FILES="projects/notes.md"          # extra files to capture
-bash backup.sh
 ```
 
-or put one path per line in `~/.claude-migration-repos` and
-`~/.claude-migration-extra-files` (`#` comments ok). Unset = nothing recorded (the
-backup warns). The source user/home are stored in the archive's `meta.env`, and
-`restore.sh` rewrites absolute-path symlinks that pointed into the source home to
-the new `$HOME` — so the username may differ between the machines.
+or put one path per line in `~/.claude-migration-extra-files` (`#` comments ok).
+
+**Git repos are discovered automatically (0.2.0).** With `MIGRATION_REPOS` unset,
+`backup.sh` scans `$HOME` (pruned — never enters `~/Library`, cloud-sync dirs,
+caches, `node_modules`/`.venv`, the output dir, or anything the archive already
+captures), finds every repo (including linked worktrees), and merges them into
+`~/.claude-migration-repos`. On a terminal it asks only what it cannot decide
+alone — the mode (review vs automatic), and what to do with no-remote repos — and
+remembers each answer. On scripts/pipes it never prompts: no-remote repos are
+parked as `?` lines and asked on the next terminal run.
+
+The list file stays hand-editable, one path per line (`#` comments ok):
+
+- `path` — record: remote + exact commit + uncommitted overlay on restore
+- `!path` — excluded, never offered again
+- `+path` — copy the whole tree (incl. `.git`) into the archive (`repo-copies/`)
+- `?path` — undecided (found without a remote on a non-terminal run)
+
+To forget all remembered answers and be asked again: `bash backup.sh
+--reset-choices`, or choose it in the startup menu on a terminal run.
+`MIGRATION_REPOS="a:b"` (colon-separated, relative to `$HOME`) still overrides
+everything — no discovery, no prompts, no file writes.
+
+The source user/home are stored in the archive's `meta.env`, and `restore.sh`
+rewrites absolute-path symlinks that pointed into the source home to the new
+`$HOME` — so the username may differ between the machines.
 
 ## Requirements & assumptions
 
