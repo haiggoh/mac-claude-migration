@@ -291,3 +291,17 @@ tentative call. Do not stop for it.
   tests/test_e2e.sh + full gate + `grep -rn 0\.1\.5`), (2) push the branch
   (gated on the full gate), never merge/tag/release. Worktree `+` copies warn
   that their .git file points into the main checkout (documented limitation).
+- 2026-11-10 ~11:2x — ADVERSARIAL SELF-REVIEW (user-requested) found and fixed one
+  real bug the suites had missed: a pty --dry-run with remembered
+  repo_mode=review OPENED THE REVIEW MENU on a new remote repo and aborted on
+  EOF — violating "dry-run never prompts". Fix: review branch gated on
+  DRY_RUN=0 (dry-run announces "would offer in the review list" instead);
+  pinned by new test_prompts.sh case 17 (RED: menu opened + rc 1 → GREEN:
+  no banner, rc 0, files untouched; 21/21). Call-site audit: all 5 prompt
+  sites now carry terminal+dry-run gates; write paths too. Also verified
+  live: --help documents --reset-choices and writes nothing; the
+  --list-destinations probe still wins over --reset-choices (rc 0);
+  dry-run on empty HOME prints the pinned summary and writes nothing;
+  VERSION/CHANGELOG still consistently 0.1.5 (Task 6 pending by design);
+  the --help header's stale "warned below" line fixed (bad741f). Fresh
+  full gate on the final tree: see final commit.

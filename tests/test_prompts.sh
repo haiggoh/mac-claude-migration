@@ -306,5 +306,26 @@ else
   bad "EOF abort" "out=$(menu_out | tail -4 | tr '\n' '|')"
 fi
 
+# 17. pty --dry-run with remembered review mode + a new remote repo: NEVER prompts
+#     (design anti-goal) — no review menu banner, rc 0, nothing written
+fresh
+mkrepo "$FAKE/proj" "https://example.com/proj.git"
+printf 'repo_mode=review\n' > "$PREFS"
+printf '!other\n' > "$LIST"
+{ sleep 3; } | env -u MIGRATION_REPOS HOME="$FAKE" PATH="$STUB:$SAVED_PATH" \
+    script -q /dev/null /bin/bash "$ROOT/backup.sh" --dry-run "$OUT" >"$PTYOUT" 2>&1
+RC=$?
+if [ "$RC" -eq 0 ] \
+   && ! menu_out | grep -q 'New repos with a remote' \
+   && ! menu_out | grep -q 'How should I record' \
+   && ! menu_out | grep -q 'Remembered choices' \
+   && menu_out | grep -q 'DRY RUN' \
+   && grep -Fqx '!other' "$LIST" \
+   && grep -q '^repo_mode=review$' "$PREFS"; then
+  ok "pty --dry-run: no repo menu opens (review mode remembered), rc 0, files untouched"
+else
+  bad "pty dry-run no-prompt" "RC=$RC out=$(menu_out | grep -aE '📦|DRY|aborted' | head -3 | tr '\n' '|')"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

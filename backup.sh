@@ -769,6 +769,12 @@ else
       for _r in ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"}; do
         REPOS+=("$_r"); MERGE_LINES+=("record"$'\t'"$_r"); _appended=1
       done
+    elif [ "$DRY_RUN" -eq 1 ]; then
+      # A dry run NEVER prompts (design anti-goal) — say what the review list
+      # would have offered instead of opening it.
+      for _r in ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"}; do
+        log "  dry run: would offer in the review list: $_r"
+      done
     else
       _review_new_repos ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"} || exit 1
       for _r in ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"}; do
