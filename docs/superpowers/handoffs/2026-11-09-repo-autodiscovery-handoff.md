@@ -260,3 +260,18 @@ tentative call. Do not stop for it.
   milestone (a)'s pending rerun — its requirements (items 1–4: worktree .git
   file, nested suppression, per-prune cases with controls, depth boundary) all
   PROVEN. Suites after fixes: repo_list 14/14, flow 8/8.
+- 2026-11-09 ~23:5x — Task 4 prompts/menus/prefs/--reset-choices complete:
+  `_read_pref`/`_write_pref` (atomic, empty value deletes), `_repo_size`,
+  `_ask_repo_mode`, `_startup_menu`, `_ask_no_remote`, `_review_new_repos`,
+  `_merge_drop_line`; flag parse + usage() line + reset gate (non-terminal or
+  MIGRATION_REPOS ⇒ exit 2; dry-run announces only); flow gains terminal
+  branches (startup menu before discovery, mode prompt when new-remote repos
+  exist and no mode remembered, review menu gates bare lines, per-repo menu
+  replaces interim `?`, parked `?` re-asked on terminal). `tests/test_prompts.sh`
+  20/20 (RED first: 0/20). Builder rulings in the SDD ledger (mode prompt only
+  when NEW_REMOTE non-empty; review-reject → `!path`; change drops !+ and
+  re-asks mode; re-scan drops all decisions; reset drops !+? + repo_mode).
+  Two real bugs caught: BRE vs ERE grep silently skipped the startup menu;
+  _WRITE_MODE subshell loss (remember=y never wrote prefs) — pref write moved
+  into _ask_repo_mode. Discriminant: terminal-gate dropped from the mode-prompt
+  path → non-terminal proof RED (rc 1 via EOF abort, 18/2) → restored.

@@ -41,16 +41,18 @@ usage() {
   # print the whole header comment block, whatever its length (a fixed range once hid
   # every line added past it — measured on rtc-ship 0.6.11)
   awk 'NR==1 {next} !/^#/ {exit} {line=$0; sub(/^# ?/, "", line); if (line == "" && !started) next; started=1; print line}' "$0"
-  printf 'Options:\n  -h, --help   show this help and exit\n  --dry-run    print what would be captured, then exit without writing\n  --list-destinations\n               print candidate destinations (path<TAB>label, default first) and exit\n'
+  printf 'Options:\n  -h, --help   show this help and exit\n  --dry-run    print what would be captured, then exit without writing\n  --list-destinations\n               print candidate destinations (path<TAB>label, default first) and exit\n  --reset-choices\n               forget remembered repo choices (repo mode + list answers) and ask\n               again on this run; needs a terminal\n'
 }
 DRY_RUN=0
 LIST_DESTS=0
+RESET_CHOICES=0
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0;;
     --dry-run) DRY_RUN=1; shift;;
     --list-destinations) LIST_DESTS=1; shift;;
+    --reset-choices) RESET_CHOICES=1; shift;;
     -*) printf '%s: unknown option: %s\n' "${0##*/}" "$1" >&2
         printf 'Try `%s --help`.\n' "${0##*/}" >&2; exit 2;;
     *) ARGS+=("$1"); shift;;
@@ -426,11 +428,212 @@ _merge_repos() {  # stdin: state<TAB>payload lines (from _read_repo_list); args:
   return 0
 }
 
+# --- prompts, menus, prefs (0.2.0) ----------------------------------------------
+# Remembered settings live in ~/.claude-migration-prefs as key=value lines
+# (starting with repo_mode=review|auto). All menu chrome goes to STDERR; only
+# results travel on stdout (the _choose_destinations convention). EOF at any
+# prompt aborts like q — never spin on a closed pipe.
+
+_read_pref() {  # _read_pref <key> — print the value of the last key= line; rc 1 when absent
+  local key="$1" line k v f
+  f="${PREFSFILE:-$HOME/.claude-migration-prefs}"
+  [ -f "$f" ] || return 1
+  v=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in
+      '#'*|"") continue ;;
+    esac
+    k="${line%%=*}"
+    if [ "$k" = "$key" ]; then v="${line#*=}"; fi
+  done < "$f"
+  if [ -z "$v" ]; then return 1; fi
+  printf '%s\n' "$v"
+  return 0
+}
+
+_write_pref() {  # _write_pref <key> <value> — atomic; empty value deletes the key; other lines kept
+  local key="$1" val="$2" f tmp line k wroteline=0
+  f="${PREFSFILE:-$HOME/.claude-migration-prefs}"
+  tmp="$(mktemp "${f}.tmp.XXXXXX")" || return 1
+  {
+    if [ -f "$f" ]; then
+      while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+          '#'*|"") printf '%s\n' "$line"; continue ;;
+        esac
+        k="${line%%=*}"
+        if [ "$k" = "$key" ]; then
+          if [ -n "$val" ]; then printf '%s=%s\n' "$key" "$val"; wroteline=1; fi
+        else
+          printf '%s\n' "$line"
+        fi
+      done < "$f"
+    fi
+    if [ "$wroteline" -eq 0 ] && [ -n "$val" ]; then
+      printf '%s=%s\n' "$key" "$val"
+    fi
+  } > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$f" || { rm -f -- "$tmp"; return 1; }
+  return 0
+}
+
+_repo_size() {  # _repo_size <abs-dir> — human size of tracked+untracked files (gitignore-respected)
+  git -C "$1" ls-files -z -c -o --exclude-standard 2>/dev/null \
+    | xargs -0 stat -f %z 2>/dev/null \
+    | awk '{s+=$1} END {printf "%.1f MB", s / 1048576}'
+}
+
+_ask_repo_mode() {  # prints "review" or "auto" on stdout; chrome stderr; sets _WRITE_MODE; abort exits 1
+  local ans ans2
+  while true; do
+    printf '\n📦 How should I record the repos I found?\n' >&2
+    printf '   1) review — show the new repos first (Enter)\n' >&2
+    printf '   2) automatic — record repos with a remote without asking\n' >&2
+    read -r ans || ans="q"
+    case "$ans" in
+      ""|1) ans="review" ;;
+      2) ans="auto" ;;
+      q|Q) warn "backup aborted — nothing was written" >&2; exit 1 ;;
+      *) printf '  Unrecognized: %s\n' "$ans" >&2; continue ;;
+    esac
+    printf 'Remember this choice for future runs? [y/N] ' >&2
+    read -r ans2 || ans2="q"
+    case "$ans2" in
+      y|Y|yes|YES)
+        # The caller captures this function's stdout via $() — a subshell — so
+        # the pref write happens HERE (a side effect survives the subshell).
+        _write_pref repo_mode "$ans"
+        ;;
+      q|Q) warn "backup aborted — nothing was written" >&2; exit 1 ;;
+      *) : ;;
+    esac
+    printf '%s\n' "$ans"
+    return 0
+  done
+}
+
+_startup_menu() {  # sets _MENU_ANS: ""=carry on | change | rescan; q/EOF aborts (exit 1)
+  local ans
+  while true; do
+    printf '\n📦 Remembered choices found (repo mode / list answers)\n' >&2
+    printf '   1) carry on with them (Enter)\n' >&2
+    printf '   2) change them (re-ask the mode; re-decide excluded and copied repos)\n' >&2
+    printf '   3) re-scan from scratch (ignore the list file this run, then rewrite it)\n' >&2
+    printf '   q) abort the backup\n\n' >&2
+    read -r ans || ans="q"
+    case "$ans" in
+      ""|1) _MENU_ANS=""; return 0 ;;
+      2|c)  _MENU_ANS="change"; return 0 ;;
+      3|r)  _MENU_ANS="rescan"; return 0 ;;
+      q|Q)  warn "backup aborted — nothing was written" >&2; exit 1 ;;
+      *)    printf '  Unrecognized: %s\n' "$ans" >&2 ;;
+    esac
+  done
+}
+
+_ask_no_remote() {  # _ask_no_remote <rel> — prints "copy" or "skip" on stdout; chrome stderr; abort exits 1
+  local rel="$1" ans sz
+  sz="$(_repo_size "$SRC/$rel")"
+  while true; do
+    printf "\n📦 Repo '%s' has no remote (size without gitignored files: %s)\n" "$rel" "$sz" >&2
+    printf '   1) copy the whole tree into the archive (incl. .git history)\n' >&2
+    printf '   2) leave it out\n' >&2
+    printf '   q) abort the backup\n\n' >&2
+    read -r ans || ans="q"
+    case "$ans" in
+      ""|1) printf 'copy\n'; return 0 ;;
+      2)    printf 'skip\n'; return 0 ;;
+      q|Q)  warn "backup aborted — nothing was written" >&2; exit 1 ;;
+      *)    printf '  Unrecognized: %s\n' "$ans" >&2 ;;
+    esac
+  done
+}
+
+_review_new_repos() {  # _review_new_repos <rel>... — sets ACCEPTED[] (pre-ticked; toggle by number; a/n/Enter); abort exits 1
+  local -a paths=() ticked=()
+  local i ans tok okn
+  for i in "$@"; do paths+=("$i"); ticked+=("1"); done
+  while true; do
+    printf '\n📦 New repos with a remote (ticked = will be recorded)\n' >&2
+    i=0
+    while [ "$i" -lt "${#paths[@]}" ]; do
+      if [ "${ticked[$i]}" -eq 1 ]; then
+        printf '   [x] %d) %s\n' "$((i + 1))" "${paths[$i]}" >&2
+      else
+        printf '   [ ] %d) %s\n' "$((i + 1))" "${paths[$i]}" >&2
+      fi
+      i=$((i + 1))
+    done
+    printf '   a = tick all   n = tick none   Enter = accept   q = abort\n\n' >&2
+    read -r ans || ans="q"
+    case "$ans" in
+      "") break ;;
+      a|A) i=0; while [ "$i" -lt "${#ticked[@]}" ]; do ticked[$i]=1; i=$((i + 1)); done ;;
+      n|N) i=0; while [ "$i" -lt "${#ticked[@]}" ]; do ticked[$i]=0; i=$((i + 1)); done ;;
+      q|Q) warn "backup aborted — nothing was written" >&2; exit 1 ;;
+      *)
+        okn=1
+        set -f
+        for tok in $ans; do
+          case "$tok" in
+            ''|*[!0-9]*) okn=0; break ;;
+          esac
+          if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#paths[@]}" ]; then okn=0; break; fi
+          if [ "${ticked[$((tok - 1))]}" -eq 1 ]; then ticked[$((tok - 1))]=0; else ticked[$((tok - 1))]=1; fi
+        done
+        set +f
+        if [ "$okn" -eq 0 ]; then printf '  Unrecognized: %s\n' "$ans" >&2; fi
+        ;;
+    esac
+  done
+  ACCEPTED=()
+  i=0
+  while [ "$i" -lt "${#paths[@]}" ]; do
+    if [ "${ticked[$i]}" -eq 1 ]; then ACCEPTED+=("${paths[$i]}"); fi
+    i=$((i + 1))
+  done
+  return 0
+}
+
+_merge_drop_line() {  # _merge_drop_line <state> <path> — remove that line from MERGE_LINES in place
+  local st="$1" p="$2" _l
+  local -a keep=()
+  for _l in ${MERGE_LINES[@]+"${MERGE_LINES[@]}"}; do
+    if [ "$_l" = "$st"$'\t'"$p" ]; then continue; fi
+    keep+=("$_l")
+  done
+  MERGE_LINES=()
+  for _l in ${keep[@]+"${keep[@]}"}; do MERGE_LINES+=("$_l"); done
+  return 0
+}
+
 # --list-destinations is a probe, like --dry-run: print the candidates and exit
 # BEFORE any work — no config parsing, no staging, nothing written.
 if [ "$LIST_DESTS" = 1 ]; then
   _candidate_destinations "${1:-$HOME/claude-migration}"
   exit 0
+fi
+
+# --- --reset-choices gate (0.2.0): before any work -----------------------------
+# Needs a terminal: in a non-terminal run it exits 2 saying so rather than
+# silently doing nothing (it would otherwise un-exclude repos with nobody there
+# to answer). MIGRATION_REPOS overrides everything (no discovery, no prompts,
+# no file writes), so the reset cannot act under it. --dry-run only announces.
+if [ "$RESET_CHOICES" -eq 1 ]; then
+  if [ -n "${MIGRATION_REPOS:-}" ]; then
+    printf '%s: --reset-choices cannot run with MIGRATION_REPOS set — the env var overrides everything\n' "${0##*/}" >&2
+    exit 2
+  fi
+  if ! { [ -t 0 ] && [ -t 1 ]; }; then
+    printf '%s: --reset-choices needs a terminal (it re-asks remembered answers interactively)\n' "${0##*/}" >&2
+    exit 2
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf 'DRY RUN: --reset-choices would delete repo_mode from %s and re-ask every !, + and ? entry in %s. Nothing changed.\n' \
+      "$HOME/.claude-migration-prefs" "$HOME/.claude-migration-repos"
+  fi
 fi
 
 SRC="$HOME"
@@ -477,11 +680,64 @@ if [ -n "${MIGRATION_REPOS:-}" ]; then
   IFS=: read -ra REPOS <<< "$MIGRATION_REPOS"
 else
   # 0.2.0: the list file is built by discovery + merge (functions above).
-  # Interactive prompts land in Task 4; this flow treats every run as
-  # automatic and parks no-remote repos as `?` lines.
+  # Terminal runs ask (startup menu -> mode prompt -> review/no-remote menus);
+  # non-terminal runs never prompt and park no-remote repos as `?` lines.
+  _terminal=0
+  if [ -t 0 ] && [ -t 1 ]; then _terminal=1; fi
+  PREFSFILE="$SRC/.claude-migration-prefs"
+  _filter=""        # "" keep all | "!+?" reset/change | "all" re-scan from scratch
+  if [ "$RESET_CHOICES" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+    _write_pref repo_mode ""
+    _filter="!+?"
+    log "reset: remembered mode deleted — every !, + and ? entry will be asked again"
+  fi
+  # Remembered mode (validated; a malformed value is treated as absent).
+  _mode="$(_read_pref repo_mode || true)"
+  _mode_valid=0
+  case "$_mode" in review|auto) _mode_valid=1 ;; esac
+  # Does the list file carry any DECIDED line (?-parked lines are not decisions)?
+  _list_decided=0
+  if [ -f "$LISTFILE" ]; then
+    if _read_repo_list "$LISTFILE" | grep -Eq $'^(record|exclude|copy)\t'; then _list_decided=1; fi
+  fi
+  _remembered_line="using remembered choices — reset with 'backup.sh --reset-choices' or the startup menu"
+  # Startup menu: terminal, not a dry run, and remembered choices exist.
+  if [ "$_terminal" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] \
+     && { [ "$_mode_valid" -eq 1 ] || [ "$_list_decided" -eq 1 ]; }; then
+    _MENU_ANS=""
+    _startup_menu
+    case "$_MENU_ANS" in
+      change) _filter="!+?"; _mode_valid=0; _mode="" ;;  # re-ask the mode below
+      rescan) _filter="all" ;;
+    esac
+    if [ -z "$_MENU_ANS" ]; then
+      log "$_remembered_line"
+    fi
+  elif [ "$_mode_valid" -eq 1 ] || [ "$_list_decided" -eq 1 ]; then
+    log "$_remembered_line"
+  fi
   DISCOVERED=()
   while IFS= read -r _d; do [ -n "$_d" ] && DISCOVERED+=("$_d"); done <<< "$(_discover_repos)"
-  _merge_repos ${DISCOVERED[@]+"${DISCOVERED[@]}"} < <(_read_repo_list "$LISTFILE")
+  # The filter turns !/+/? (reset/change) or every decision (re-scan) back into
+  # new repos for THIS RUN, so the questions come back; the file is rewritten
+  # after re-answering.
+  _file_changed=0
+  if [ -n "$_filter" ]; then
+    _filtered=""
+    while IFS= read -r _l; do
+      [ -n "$_l" ] || continue
+      case "$_l" in
+        comment$'\t'*) _filtered="${_filtered}${_filtered:+$'\n'}$_l" ;;
+        record$'\t'*)  if [ "$_filter" = "all" ]; then continue; fi
+                       _filtered="${_filtered}${_filtered:+$'\n'}$_l" ;;
+        *)             : ;;   # exclude/copy/undecided: dropped, will be re-asked
+      esac
+    done <<< "$(_read_repo_list "$LISTFILE")"
+    _merge_repos ${DISCOVERED[@]+"${DISCOVERED[@]}"} <<< "$_filtered"
+    _file_changed=1
+  else
+    _merge_repos ${DISCOVERED[@]+"${DISCOVERED[@]}"} < <(_read_repo_list "$LISTFILE")
+  fi
   # REPOS/COPIES carry only on-disk repos — a listed-but-missing path keeps its
   # line in the file (MERGE_LINES) and its warn, but is not "recorded".
   for _r in ${DECIDED_RECORD[@]+"${DECIDED_RECORD[@]}"}; do
@@ -491,15 +747,74 @@ else
     _merge_in_missing "$_r" || COPIES+=("$_r")
   done
   _appended=0
-  for _r in ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"}; do
-    REPOS+=("$_r"); MERGE_LINES+=("record"$'\t'"$_r"); _appended=1
-  done
-  for _r in ${NEW_NOREMOTE[@]+"${NEW_NOREMOTE[@]}"}; do
-    MERGE_LINES+=("undecided"$'\t'"$_r"); _appended=1
-  done
+  # New repos WITH a remote: the mode decides (prompted when unknown), review
+  # menu or automatic bare line.
+  if [ "${#NEW_REMOTE[@]}" -gt 0 ]; then
+    if [ "$_mode_valid" -eq 0 ]; then
+      if [ "$_terminal" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+        # _ask_repo_mode writes the pref itself when the user answers y — its
+        # stdout is captured here, and an assignment inside $() would not
+        # survive the subshell.
+        _mode="$(_ask_repo_mode)"
+        _mode_valid=1
+      else
+        _mode="auto"     # non-terminal / dry-run: interim automatic, no prompts
+      fi
+    fi
+    if [ "$_mode" = "auto" ] || [ "$_terminal" -eq 0 ]; then
+      for _r in ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"}; do
+        REPOS+=("$_r"); MERGE_LINES+=("record"$'\t'"$_r"); _appended=1
+      done
+    else
+      _review_new_repos ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"} || exit 1
+      for _r in ${NEW_REMOTE[@]+"${NEW_REMOTE[@]}"}; do
+        _acc=0
+        for _a in ${ACCEPTED[@]+"${ACCEPTED[@]}"}; do
+          if [ "$_a" = "$_r" ]; then _acc=1; break; fi
+        done
+        if [ "$_acc" -eq 1 ]; then
+          REPOS+=("$_r"); MERGE_LINES+=("record"$'\t'"$_r")
+        else
+          MERGE_LINES+=("exclude"$'\t'"$_r")   # review-reject: decided no; reset re-offers
+        fi
+        _appended=1
+      done
+    fi
+  fi
+  # New repos WITHOUT a remote: per-repo menu on a terminal; `?` when non-terminal.
+  if [ "${#NEW_NOREMOTE[@]}" -gt 0 ]; then
+    if [ "$_terminal" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+      for _r in ${NEW_NOREMOTE[@]+"${NEW_NOREMOTE[@]}"}; do
+        _ans="$(_ask_no_remote "$_r")" || exit 1
+        if [ "$_ans" = "copy" ]; then
+          COPIES+=("$_r"); MERGE_LINES+=("copy"$'\t'"$_r")
+        else
+          MERGE_LINES+=("exclude"$'\t'"$_r")
+        fi
+        _appended=1
+      done
+    else
+      for _r in ${NEW_NOREMOTE[@]+"${NEW_NOREMOTE[@]}"}; do
+        MERGE_LINES+=("undecided"$'\t'"$_r"); _appended=1
+      done
+    fi
+  fi
+  # A `?` parked by an earlier non-terminal run is asked on this terminal run.
+  if [ "$_terminal" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ "${#DECIDED_UNDECIDED[@]}" -gt 0 ]; then
+    for _r in ${DECIDED_UNDECIDED[@]+"${DECIDED_UNDECIDED[@]}"}; do
+      _ans="$(_ask_no_remote "$_r")" || exit 1
+      _merge_drop_line undecided "$_r"
+      if [ "$_ans" = "copy" ]; then
+        COPIES+=("$_r"); MERGE_LINES+=("copy"$'\t'"$_r")
+      else
+        MERGE_LINES+=("exclude"$'\t'"$_r")
+      fi
+      _appended=1
+    done
+  fi
   # Write the list file only when something changed (idempotent re-runs rewrite
   # nothing) and NEVER on --dry-run (a dry run writes nothing, ever).
-  if [ "$_appended" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+  if { [ "$_appended" -eq 1 ] || [ "$_file_changed" -eq 1 ]; } && [ "$DRY_RUN" -eq 0 ]; then
     _merged=""
     for _l in ${MERGE_LINES[@]+"${MERGE_LINES[@]}"}; do _merged="${_merged}${_merged:+$'\n'}$_l"; done
     if [ -n "$_merged" ]; then _write_repo_list "$LISTFILE" "$_merged"; fi
@@ -508,11 +823,22 @@ else
   if [ "${#DISCOVERED[@]}" -eq 0 ] && [ "$_n_listed" -eq 0 ]; then
     warn "no repos discovered under \$HOME and no list file — recording none"
   fi
-  _n_und=$(( ${#DECIDED_UNDECIDED[@]} + ${#NEW_NOREMOTE[@]} ))
-  log "repos: ${#REPOS[@]} recorded, ${#COPIES[@]} copied whole, ${#DECIDED_EXCLUDE[@]} excluded, $_n_und undecided, ${#MISSING[@]} missing"
+  # Summary counts read the FINAL line set: recorded/copied are the on-disk
+  # REPOS/COPIES arrays (missing entries count only as missing), excluded and
+  # undecided count every remaining ! and ? line.
+  _n_excl=0; _n_und=0
+  for _l in ${MERGE_LINES[@]+"${MERGE_LINES[@]}"}; do
+    case "${_l%%$'\t'*}" in
+      exclude)   _n_excl=$((_n_excl + 1)) ;;
+      undecided) _n_und=$((_n_und + 1)) ;;
+    esac
+  done
+  log "repos: ${#REPOS[@]} recorded, ${#COPIES[@]} copied whole, $_n_excl excluded, $_n_und undecided, ${#MISSING[@]} missing"
   if [ "$_n_und" -gt 0 ]; then
-    for _r in ${DECIDED_UNDECIDED[@]+"${DECIDED_UNDECIDED[@]}"} ${NEW_NOREMOTE[@]+"${NEW_NOREMOTE[@]}"}; do
-      warn "  undecided (no remote): $_r"
+    for _l in ${MERGE_LINES[@]+"${MERGE_LINES[@]}"}; do
+      case "${_l%%$'\t'*}" in
+        undecided) warn "  undecided (no remote): ${_l#*$'\t'}" ;;
+      esac
     done
   fi
 fi
