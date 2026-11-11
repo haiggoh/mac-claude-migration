@@ -92,10 +92,14 @@ fi
 
 # --- run 2: pty, seeded + and ! lines ---------------------------------------------
 sed -i '' -e 's/^?local$/+local/' -e 's/^wt$/!wt/' "$LIST" 2>/dev/null || sed -i -e 's/^?local$/+local/' -e 's/^wt$/!wt/' "$LIST"
-# keys paced like test_destinations (1.5 s after each key — the measured race)
-{ sleep 1; printf '\n'; sleep 1.5; } | env -u MIGRATION_REPOS HOME="$FAKE" PATH="$STUB:$SAVED_PATH" \
-    script -q /dev/null /bin/bash "$ROOT/backup.sh" "$OUT2" >"$PTYOUT" 2>&1
-RC2=$?
+# pty via tests/lib/pty_drive.py: the Enter key is sent only after the startup menu
+# appeared in the transcript (condition-based, not timed) and the master is never
+# closed before the child exits. The old `script`+timed-feeder pipeline let an early
+# stdin EOF consume the queued key under load (flake mcm-e2e-run-2-pty-using;
+# regression test tests/test_e2e_run2_pty.sh). Driver watchdog: 90 s.
+RC2=0
+env -u MIGRATION_REPOS HOME="$FAKE" PATH="$STUB:$SAVED_PATH" \
+  python3 "$HERE/lib/pty_drive.py" "$PTYOUT" 90 -- /bin/bash "$ROOT/backup.sh" "$OUT2" || RC2=$?
 arch2=""; for a in "$OUT2"/claude-migration-*.tar.gz; do [ -f "$a" ] && arch2="$a"; done
 c_rc=$([ "$RC2" -eq 0 ] && echo y || echo n)
 c_line=$(tr -d '\r' < "$PTYOUT" | grep -q 'using remembered choices' && echo y || echo n)
