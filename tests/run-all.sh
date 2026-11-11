@@ -17,5 +17,6 @@ echo; echo "== flow (discovery wired into the run) ==";      "$HERE/test_flow.sh
 echo; echo "== prompts (menus, prefs, --reset-choices) ==";  "$HERE/test_prompts.sh"      || RC=1
 echo; echo "== repo copies (whole-tree + restore) ==";       "$HERE/test_repo_copies.sh"  || RC=1
 echo; echo "== e2e (five-part fake HOME, backup + restore) =="; "$HERE/test_e2e.sh"        || RC=1
+echo; echo "== e2e run-2 pty flake regression ==";               "$HERE/test_e2e_run2_pty.sh" || RC=1
 echo; [ $RC -eq 0 ] && echo "ALL SUITES PASSED" || echo "SOME SUITES FAILED"
 exit $RC
