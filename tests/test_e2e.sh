@@ -84,8 +84,8 @@ if printf '%s' "$TSV1" | grep -q $'^rem\t' && printf '%s' "$TSV1" | grep -q $'^w
 else
   bad "run 1 tsv" "$(printf '%s' "$TSV1" | tr '\n' '|')"
 fi
-if printf '%s' "$META" | grep -q '^TOOL_VERSION=0.2.0$'; then
-  ok "archive meta.env pins TOOL_VERSION=0.2.0"
+if printf '%s' "$META" | grep -q "^TOOL_VERSION=$(tr -d '[:space:]' < "$ROOT/VERSION")$"; then
+  ok "archive meta.env pins TOOL_VERSION=$(tr -d '[:space:]' < "$ROOT/VERSION") (derived from VERSION)"
 else
   bad "TOOL_VERSION" "meta: $(printf '%s' "$META" | grep TOOL_VERSION)"
 fi

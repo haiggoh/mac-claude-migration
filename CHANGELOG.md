@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.2.1] — 2026-11-11
+
+### Added — `mac-claude-migration` front-door command
+
+- New `mac-claude-migration.sh`: a bare run on a terminal opens a menu
+  (1 backup, 2 restore, q quit); `--help` or a non-terminal run prints an
+  overview naming `mac-claude-backup` / `mac-claude-restore`;
+  `mac-claude-migration backup|restore ...` passes straight through.
+  Non-terminal runs never prompt.
+- The Homebrew formula gains a `mac-claude-migration` bin wrapper
+  (haiggoh/homebrew-tap), so the package name itself is now a runnable
+  command that shows the overview.
+- Test infra: `tests/lib/pty_drive.py` drives pty cases condition-based
+  (fixes the e2e run-2 flake, see PR #2).
+
 ## [0.2.0] — 2026-11-10
 
 ### Added — repo auto-discovery (user spec, 2026-11-09)

@@ -7,10 +7,16 @@ redownloaded, reinstall everything that can.**
 
 ```sh
 brew install haiggoh/tap/mac-claude-migration
-# puts mac-claude-backup and mac-claude-restore on your PATH;
-# the tap's hourly auto-bump keeps the formula on the newest release,
-# so `brew upgrade mac-claude-migration` is all the updating you do
+# puts mac-claude-migration (front-door menu), mac-claude-backup and
+# mac-claude-restore on your PATH; the tap's hourly auto-bump keeps the
+# formula on the newest release, so `brew upgrade mac-claude-migration`
+# is all the updating you do
 ```
+
+`mac-claude-migration` with no arguments opens a small menu (1 backup,
+2 restore, q quit) on a terminal; `--help` prints an overview naming the
+two commands. `mac-claude-migration backup|restore ...` passes straight
+through.
 
 No Homebrew (or prefer the scripts)? Clone this repo and run them directly:
 
