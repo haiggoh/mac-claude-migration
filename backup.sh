@@ -890,10 +890,78 @@ COMMON_EXCLUDES=(
   --exclude='**/node_modules/'
   --exclude='**/__pycache__/'
 )
+# Vanish-tolerant wrappers (v0.3.0). On a LIVE machine the source tree changes
+# WHILE a multi-minute backup runs: sessions rewrite ~/.claude, the
+# waypoints-backups ring rotates its snapshots away, repos are edited
+# concurrently. Measured 2026-11-23 — rsync exit 23 (`open (2) ... No such
+# file or directory`) and tar `Cannot stat` each killed the WHOLE run under
+# set -e. Contract: a file that vanished mid-run is warned and skipped; ANY
+# OTHER error is still fatal.
+_vanish_log_count() {  # _vanish_log_count <logfile> — print the vanished-notice
+                       # count on stdout; rc 0 when EVERY line is vanished-class,
+                       # rc 1 when a real error line exists (suppressed here; the
+                       # caller prints the log once)
+  local line n=0 bad=0
+  while IFS= read -r line; do
+    case "$line" in
+      ''|*"No such file or directory"*|*"vanished"*|*"skipping non-regular file"*|*"Error exit delayed"*)
+        n=$((n + 1)) ;;
+      *)  bad=1 ;;
+    esac
+  done < "$1"
+  printf '%s\n' "$n"
+  [ "$bad" -eq 0 ]
+}
+_rsync_tolerant() {  # _rsync_tolerant <rsync args...> — vanished files warn+skip; real errors fatal
+  local log rc n
+  log="$(mktemp "${TMPDIR:-/tmp}/mcm-rsync-log.XXXXXX")" || return 1
+  rc=0; rsync "$@" 2>"$log" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rc=0; rsync "$@" 2>>"$log" || rc=$?    # one retry: a vanished source is gone for good, a slow one may have copied
+  fi
+  if [ "$rc" -eq 0 ]; then rm -f -- "$log"; return 0; fi
+  if n="$( _vanish_log_count "$log" 2>/dev/null )"; then
+    warn "skipped $n file(s) that vanished mid-copy (live session rewrote them)"
+    rm -f -- "$log"; return 0
+  fi
+  cat -- "$log" >&2
+  printf '%s: rsync failed (exit %d) — aborting the backup\n' "${0##*/}" "$rc" >&2
+  rm -f -- "$log"
+  return 1
+}
+_tar_tolerant() {  # _tar_tolerant <out.tar.gz> <filelist> — run with cwd INSIDE the
+                    # repo: filelist entries that already vanished are dropped with
+                    # a warn, and a tar failure is tolerated only when every error
+                    # line is vanished-class
+  local out="$1" list="$2" kept log rc n line
+  kept="$(mktemp "${TMPDIR:-/tmp}/mcm-tar-list.XXXXXX")" || return 1
+  log="$(mktemp "${TMPDIR:-/tmp}/mcm-tar-log.XXXXXX")" || { rm -f -- "$kept"; return 1; }
+  n=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ -e "$line" ]; then printf '%s\n' "$line" >> "$kept"; else n=$((n + 1)); fi
+  done < "$list"
+  if [ "$n" -gt 0 ]; then warn "  $n file(s) vanished before tar — skipped"; fi
+  if [ ! -s "$kept" ]; then
+    warn "  every listed file vanished — no tar written"
+    rm -f -- "$kept" "$log"; return 0
+  fi
+  rc=0; tar czf "$out" -T "$kept" 2>"$log" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if n="$( _vanish_log_count "$log" 2>/dev/null )"; then
+      warn "  tar skipped $n vanished file notice(s) during packing"
+    else
+      printf '%s: tar failed (exit %d) — aborting the backup\n' "${0##*/}" "$rc" >&2
+      rm -f -- "$kept" "$log"; return 1
+    fi
+  fi
+  rm -f -- "$kept" "$log"
+  return 0
+}
 copy_rel() {  # copy_rel <relpath> [extra rsync args...]  — run from within $SRC
   local rel="$1"; shift
   [ -e "$SRC/$rel" ] || { warn "skip (missing): $rel"; return 0; }
-  ( cd "$SRC" && rsync -aR "${COMMON_EXCLUDES[@]}" "$@" "$rel" "$HOMEDIR/" )
+  ( cd "$SRC" && _rsync_tolerant -aR "${COMMON_EXCLUDES[@]}" "$@" "$rel" "$HOMEDIR/" )
 }
 
 ########################################################################
@@ -904,7 +972,7 @@ log "1/6  Claude Code state (.claude, minus redownloadable payloads/caches)"
 # that tells restore.sh which marketplaces + plugins to reinstall.
 # (Guarded like copy_rel: a fresh machine without .claude must not crash here.)
 if [ -e "$SRC/.claude" ]; then
-  ( cd "$SRC" && rsync -aR "${COMMON_EXCLUDES[@]}" \
+  ( cd "$SRC" && _rsync_tolerant -aR "${COMMON_EXCLUDES[@]}" \
     --exclude='.claude/plugins/cache/' \
     --exclude='.claude/plugins/marketplaces/' \
     --exclude='.claude/plugins/plugin-catalog-cache.json' \
@@ -928,7 +996,7 @@ log "2/6  Top-level config, project map & shell state"
 ########################################################################
 copy_rel ".claude.json"
 for f in "$SRC"/.claude.json.bak*; do
-  [ -e "$f" ] && ( cd "$SRC" && rsync -aR --no-specials --no-devices "$(basename "$f")" "$HOMEDIR/" )
+  [ -e "$f" ] && ( cd "$SRC" && _rsync_tolerant -aR --no-specials --no-devices "$(basename "$f")" "$HOMEDIR/" )
 done
 # CAPTURED_WHOLESALE members are copied here (and pruned from discovery by the
 # same list): one entry added to the variable is both copied and never walked.
@@ -993,7 +1061,7 @@ for rel in ${REPOS[@]+"${REPOS[@]}"}; do
       | grep -vE '(^|/)(\.venv|venv|node_modules|__pycache__)/' \
       | grep -vE '(^|/)\.DS_Store$' > "$STAGE/repo-overlays/$safe.filelist" || true
     if [ -s "$STAGE/repo-overlays/$safe.filelist" ]; then
-      tar czf "$STAGE/repo-overlays/$safe.tar.gz" -T "$STAGE/repo-overlays/$safe.filelist"
+      _tar_tolerant "$STAGE/repo-overlays/$safe.tar.gz" "$STAGE/repo-overlays/$safe.filelist"
       echo "    overlay: $rel ($(wc -l < "$STAGE/repo-overlays/$safe.filelist" | tr -d ' ') file(s))"
     fi )
   # Warn about unpushed commits — those are NOT on the remote, so cloning misses them.
@@ -1027,7 +1095,7 @@ for rel in ${COPIES[@]+"${COPIES[@]}"}; do
       | grep -vE '(^|/)\.DS_Store$' \
       | grep -v '^$' > "$STAGE/repo-copies/$safe.filelist" || true
     if [ -s "$STAGE/repo-copies/$safe.filelist" ]; then
-      tar czf "$STAGE/repo-copies/$safe.tar.gz" -C "$d" -T "$STAGE/repo-copies/$safe.filelist"
+      _tar_tolerant "$STAGE/repo-copies/$safe.tar.gz" "$STAGE/repo-copies/$safe.filelist"
       echo "    whole-tree copy: $rel ($(wc -l < "$STAGE/repo-copies/$safe.filelist" | tr -d ' ') file(s) incl. .git)"
     fi )
 done

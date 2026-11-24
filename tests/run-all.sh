@@ -14,6 +14,7 @@ echo; echo "== destinations (detection + --list-destinations) =="; "$HERE/test_d
 echo; echo "== discovery (repo auto-discovery walk) ==";    "$HERE/test_discovery.sh"    || RC=1
 echo; echo "== repo list (list-file I/O + merge) ==";       "$HERE/test_repo_list.sh"    || RC=1
 echo; echo "== flow (discovery wired into the run) ==";      "$HERE/test_flow.sh"         || RC=1
+echo; echo "== race tolerance (files vanishing mid-run) =="; "$HERE/test_race.sh"         || RC=1
 echo; echo "== prompts (menus, prefs, --reset-choices) ==";  "$HERE/test_prompts.sh"      || RC=1
 echo; echo "== repo copies (whole-tree + restore) ==";       "$HERE/test_repo_copies.sh"  || RC=1
 echo; echo "== e2e (five-part fake HOME, backup + restore) =="; "$HERE/test_e2e.sh"        || RC=1
