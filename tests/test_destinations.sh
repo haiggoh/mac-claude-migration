@@ -632,5 +632,53 @@ else
 fi
 rm -rf "$FAKE"
 
+# 37. sha256 MISMATCH path: a fake shasum on PATH (hash = md5 of the PATH, so
+#     src and dst sums diverge) -> copy rejected as NOT byte-accurate, temp KEPT
+#     with the archive inside, rc 0. Proves the comparison is real, not declared.
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudRoot"
+STUBD=$(mktemp -d)
+printf '#!/bin/sh\nexit 1\n' > "$STUBD/brew";  chmod +x "$STUBD/brew"
+printf '#!/bin/sh\nexit 1\n' > "$STUBD/pipx"; chmod +x "$STUBD/pipx"
+cat > "$STUBD/shasum" <<'SH'
+#!/bin/sh
+f=""
+while [ $# -gt 0 ]; do case "$1" in --) shift;; -*) shift;; *) f="$1"; shift;; esac; done
+printf '%s  %s\n' "$(printf '%s' "$f" | md5)" "$f"
+SH
+chmod +x "$STUBD/shasum"
+{ sleep 1; printf '2\n'; sleep 1.5; } | env -u MIGRATION_REPOS HOME="$FAKE" PATH="$STUBD:$PATH" \
+    script -q /dev/null /bin/bash "$ROOT/backup.sh" >"$PTYOUT" 2>&1
+RC=$?
+tmps="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'mcm-build.*' 2>/dev/null)"
+arch_in_tmp=""
+while IFS= read -r t; do
+  [ -n "$t" ] || continue
+  [ -n "$(find "$t" -name 'claude-migration-*.tar.gz' 2>/dev/null)" ] && arch_in_tmp=yes
+done <<< "$tmps"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'NOT byte-accurate (sha256 mismatch)' \
+   && menu_out | grep -q 'no cloud copy verified' \
+   && [ -n "$tmps" ] && [ "$arch_in_tmp" = "yes" ] \
+   && [ -z "$(find "$FAKE/Library/CloudStorage/CloudRoot" -name 'claude-migration-*.tar.gz' 2>/dev/null)" ]; then
+  ok "sha mismatch: copy rejected, temp kept with archive, cloud dir empty, rc 0"
+else
+  bad "sha mismatch" "rc=$RC tmps=$tmps got: $(menu_out | tail -5 | tr '\n' '|')"
+fi
+while IFS= read -r t; do [ -n "$t" ] && rm -rf -- "$t"; done <<< "$tmps"
+rm -rf "$STUBD" "$FAKE"
+
+# 38. "a" with NO cloud dirs detected collapses to the default (not an empty pick)
+FAKE=$(mktemp -d)
+run_menu "$FAKE" "a"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-" \
+   && menu_out | grep -Fq "Destinations: $FAKE/claude-migration (primary)"; then
+  ok "a with no cloud dirs: collapses to the default"
+else
+  bad "a no-cloud" "rc=$RC got: $(menu_out | grep -iE 'destination|archive' | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

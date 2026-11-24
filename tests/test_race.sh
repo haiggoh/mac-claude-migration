@@ -75,12 +75,13 @@ fi
 rm -f "$L"
 
 # --- _rsync_tolerant unit pins ------------------------------------------------
-# 3. vanished source (rsync link_stat No such file, exit 23) -> tolerated rc 0
+# 3. vanished source (rsync link_stat No such file, exit 23) -> tolerated rc 0 AND warned
 fresh
-if _rsync_tolerant -a "$FAKE/nope-vanished" "$OUT/dest/" 2>/dev/null; then
-  ok "_rsync_tolerant: vanished source arg (exit 23 class) -> rc 0"
+out3="$(_rsync_tolerant -a "$FAKE/nope-vanished" "$OUT/dest/" 2>&1)"; rc3=$?
+if [ "$rc3" -eq 0 ] && printf '%s' "$out3" | grep -q 'vanished'; then
+  ok "_rsync_tolerant: vanished source arg (exit 23 class) -> rc 0 + warn mentions vanished"
 else
-  bad "_rsync_tolerant vanished" "rc=$?"
+  bad "_rsync_tolerant vanished" "rc=$rc3 out=$out3"
 fi
 # 4. a real rsync error (unknown option) -> fatal rc 1
 if _rsync_tolerant --definitely-not-an-rsync-flag 2>/dev/null; then
@@ -94,12 +95,13 @@ fi
 fresh
 mkdir -p "$FAKE/repo"; printf 'data\n' > "$FAKE/repo/real.txt"
 printf 'real.txt\nvanished.txt\n' > "$FAKE/list"
-( cd "$FAKE/repo" && _tar_tolerant "$OUT/t.tar.gz" "$FAKE/list" 2>/dev/null ); rc=$?
+out5="$( cd "$FAKE/repo" && _tar_tolerant "$OUT/t.tar.gz" "$FAKE/list" 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] && tar -tzf "$OUT/t.tar.gz" 2>/dev/null | grep -qx 'real.txt' \
-   && ! tar -tzf "$OUT/t.tar.gz" 2>/dev/null | grep -q 'vanished.txt'; then
-  ok "_tar_tolerant: vanished filelist entry dropped, real file packed, rc 0"
+   && ! tar -tzf "$OUT/t.tar.gz" 2>/dev/null | grep -q 'vanished.txt' \
+   && printf '%s' "$out5" | grep -q 'vanished before tar'; then
+  ok "_tar_tolerant: vanished filelist entry dropped + warned, real file packed, rc 0"
 else
-  bad "_tar_tolerant vanished entry" "rc=$rc contents=$(tar -tzf "$OUT/t.tar.gz" 2>/dev/null | tr '\n' '|')"
+  bad "_tar_tolerant vanished entry" "rc=$rc out=$out5 contents=$(tar -tzf "$OUT/t.tar.gz" 2>/dev/null | tr '\n' '|')"
 fi
 # 6. unreadable real file -> tar Cannot open Permission denied -> fatal rc 1
 fresh
@@ -116,11 +118,11 @@ fi
 fresh
 mkdir -p "$FAKE/repo"
 printf 'gone1\ngone2\n' > "$FAKE/list"
-( cd "$FAKE/repo" && _tar_tolerant "$OUT/t3.tar.gz" "$FAKE/list" 2>/dev/null ); rc=$?
-if [ "$rc" -eq 0 ] && [ ! -e "$OUT/t3.tar.gz" ]; then
-  ok "_tar_tolerant: all entries vanished -> rc 0, no empty tar written"
+out7="$( cd "$FAKE/repo" && _tar_tolerant "$OUT/t3.tar.gz" "$FAKE/list" 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$OUT/t3.tar.gz" ] && printf '%s' "$out7" | grep -q 'every listed file vanished'; then
+  ok "_tar_tolerant: all entries vanished -> rc 0, no empty tar written, warned"
 else
-  bad "_tar_tolerant all-vanished" "rc=$rc tar=$([ -e "$OUT/t3.tar.gz" ] && echo yes)"
+  bad "_tar_tolerant all-vanished" "rc=$rc out=$out7 tar=$([ -e "$OUT/t3.tar.gz" ] && echo yes)"
 fi
 
 # --- e2e pins -----------------------------------------------------------------
@@ -141,6 +143,9 @@ rm -rf "$FAKE/.claude/race"
 wait "$BGPID"
 rc="$(sed -n 's/^RC://p' "$LOG")"
 arch=""; for a in "$OUT"/claude-migration-*.tar.gz; do [ -f "$a" ] && arch="$a"; done
+# The race itself is timing-dependent (the RED proof of it firing is the pre-fix
+# run: rc 23 in /tmp/mcm-prompts-red-era logs); here we pin "not fatal + archive".
+# The warn TEXT is pinned deterministically by unit cases 3/5/7 above.
 if [ "$rc" = "0" ] && [ -n "$arch" ]; then
   ok "e2e: .claude files vanished mid-rsync -> run completes rc 0, archive built"
 else

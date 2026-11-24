@@ -430,5 +430,43 @@ else
   bad "batch q" "RC=$RC out=$(menu_out | tail -8 | tr '\n' '|') list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi
 
+# 24. batch menu default: bare Enter = copy ALL (both + lines)
+fresh
+mkrepo "$FAKE/local1"; mkrepo "$FAKE/local2"
+RC=0; run_pty "$FAKE" "$OUT" "" || RC=$?
+if [ "$RC" -eq 0 ] && grep -Fqx '+local1' "$LIST" && grep -Fqx '+local2' "$LIST"; then
+  ok "batch menu: Enter default = copy all (both + lines)"
+else
+  bad "batch default" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
+fi
+
+# 25. q at the REVIEW menu re-asks (no abort offered), then Enter accepts
+#     (keys: "" mode=review, "n" remember=no, "q" at the review menu, "" accept)
+fresh
+mkrepo "$FAKE/r1" "https://example.com/r1.git"
+RC=0; run_pty "$FAKE" "$OUT" "" "n" "q" "" || RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'Unrecognized: q' \
+   && ! menu_out | grep -q 'aborted' \
+   && ! menu_out | grep -Fq 'q = abort' \
+   && grep -Fqx 'r1' "$LIST"; then
+  ok "review menu: q re-asks (no abort), Enter accepts, rc 0, list written"
+else
+  bad "review q" "RC=$RC out=$(menu_out | tail -6 | tr '\n' '|') list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
+fi
+
+# 26. q at a PER-REPO menu (reached via batch choice 3) re-asks; then 1 copies
+fresh
+mkrepo "$FAKE/local1"
+RC=0; run_pty "$FAKE" "$OUT" "3" "q" "1" || RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'Unrecognized: q' \
+   && ! menu_out | grep -q 'aborted' \
+   && grep -Fqx '+local1' "$LIST"; then
+  ok "per-repo menu (batch 3): q re-asks, no abort, then 1 copies, rc 0"
+else
+  bad "per-repo q" "RC=$RC out=$(menu_out | tail -6 | tr '\n' '|') list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
