@@ -201,7 +201,7 @@ if menu_out | grep -Fq '📦 Mac Claude Migration' \
    && menu_out | grep -Fq "$RULE72" && ! menu_out | grep -Eq '={73}' \
    && menu_out | grep -Fq '  1) Default — this is where the archive is built' \
    && menu_out | grep -Fq "     $FAKE/claude-migration" \
-   && menu_out | grep -Fq '  Enter = default only    numbers = pick several (e.g. 1 3 or 1,3)    a = all detected' \
+   && menu_out | grep -Fq '  Enter = default only    numbers = pick several (e.g. 1 3 or 1,3)    a = all detected cloud directories' \
    && menu_out | grep -Fq '  c = custom directory    q = abort the backup'; then
   ok "menu block: title/subtitle/rule x72/entry 1 + path/footer verbatim"
 else
@@ -241,17 +241,21 @@ else
 fi
 rm -rf "$FAKE"
 
-# 12. "a": every LISTED candidate, default first (primary) -- the default is
-#     candidate 1 of the list the user sees (controller ruling on the grammar)
+# 12. "a" (0.3.0): every detected CLOUD directory (entries 2..n — the local
+#     default is entry 1 and is NOT cloud). A cloud-only pick builds the archive
+#     once in a TEMP dir (dry-run announces "(temp dir)"), never in the default.
 FAKE=$(mktemp -d)
 mkdir -p "$FAKE/Library/CloudStorage/CloudRoot" "$FAKE/Dropbox"
 run_menu "$FAKE" "a"
 if [ "$RC" -eq 0 ] \
-   && menu_out | grep -Fq "Destinations: $FAKE/claude-migration (primary), $FAKE/Library/CloudStorage/CloudRoot, $FAKE/Dropbox" \
-   && menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/claude-migration-"; then
-  ok "a: all listed candidates, default first (primary)"
+   && menu_out | grep -Fq "Destinations: $FAKE/Library/CloudStorage/CloudRoot, $FAKE/Dropbox" \
+   && ! menu_out | grep -Fq '(primary)' \
+   && menu_out | grep -Fq 'Would write archive: (temp dir)/claude-migration-' \
+   && ! menu_out | grep -Fq "Would write archive: $FAKE/claude-migration/" \
+   && menu_out | grep -q 'temp dir'; then
+  ok "a: all detected cloud dirs only (default excluded), temp build announced in dry-run"
 else
-  bad "a all-listed" "rc=$RC got: $(menu_out | grep -iE 'destination|archive' | tr '\n' '|')"
+  bad "a cloud-only" "rc=$RC got: $(menu_out | grep -iE 'destination|archive|temp' | tr '\n' '|')"
 fi
 rm -rf "$FAKE"
 
@@ -387,14 +391,16 @@ else
 fi
 rm -rf "$FAKE"
 
-# 23. garbage input re-asks (menu re-rendered), then a valid pick proceeds
+# 23. garbage input re-asks (menu re-rendered), then a valid pick proceeds.
+#     A single cloud-dir pick is cloud-only (0.3.0): dry-run builds in "(temp dir)".
 FAKE=$(mktemp -d)
 mkdir -p "$FAKE/Library/CloudStorage/CloudRoot"
 run_menu "$FAKE" "banana" "2"
 if [ "$RC" -eq 0 ] \
    && menu_out | grep -Fq 'Unrecognized selection' \
-   && menu_out | grep -Fq "Would write archive: $FAKE/Library/CloudStorage/CloudRoot/claude-migration-"; then
-  ok "garbage re-asks, then a valid pick proceeds"
+   && menu_out | grep -Fq 'Would write archive: (temp dir)/claude-migration-' \
+   && menu_out | grep -Fq "Destinations: $FAKE/Library/CloudStorage/CloudRoot"; then
+  ok "garbage re-asks, then a valid cloud pick proceeds (temp build announced)"
 else
   bad "garbage re-ask" "rc=$RC got: $(menu_out | tail -6 | tr '\n' '|')"
 fi
@@ -420,9 +426,11 @@ if [ "$RC" -eq 0 ] \
    && [ -n "$(find "$PRIM" -name 'claude-migration-*.tar.gz')" ] \
    && [ -n "$(find "$FAKE/claude-migration" -name 'claude-migration-*.tar.gz')" ] \
    && [ "$(stat -f %z "$PRIM"/claude-migration-*.tar.gz)" = "$(stat -f %z "$FAKE/claude-migration"/claude-migration-*.tar.gz)" ] \
+   && [ "$(shasum -a 256 -- "$PRIM"/claude-migration-*.tar.gz | awk '{print $1}')" = "$(shasum -a 256 -- "$FAKE/claude-migration"/claude-migration-*.tar.gz | awk '{print $1}')" ] \
    && menu_out | grep -Fq "DONE. Archive: $PRIM/claude-migration-" \
-   && menu_out | grep -Fq "destinations: $PRIM (primary), $FAKE/claude-migration"; then
-  ok "2 1 real run: built in primary, copied to default, sizes equal, DONE lists all"
+   && menu_out | grep -Fq "destinations: $PRIM (primary), $FAKE/claude-migration" \
+   && menu_out | grep -q 'sha256 verified'; then
+  ok "2 1 real run: built in primary, copied sha256-verified to default, DONE lists all"
 else
   bad "2 1 real multi-dest" "rc=$RC got: $(menu_out | tail -5 | tr '\n' '|')"
 fi
@@ -484,14 +492,16 @@ else
 fi
 rm -rf "$FAKE"
 
-# 29. out-of-range number re-asks, then a valid pick proceeds
+# 29. out-of-range number re-asks, then a valid pick proceeds (single cloud pick
+#     = cloud-only -> temp build announced in dry-run)
 FAKE=$(mktemp -d)
 mkdir -p "$FAKE/Library/CloudStorage/CloudRoot"
 run_menu "$FAKE" "99" "2"
 if [ "$RC" -eq 0 ] \
    && menu_out | grep -Fq 'Unrecognized selection' \
-   && menu_out | grep -Fq "Would write archive: $FAKE/Library/CloudStorage/CloudRoot/claude-migration-"; then
-  ok "99 out of range: re-asks, then 2 picks CloudRoot"
+   && menu_out | grep -Fq 'Would write archive: (temp dir)/claude-migration-' \
+   && menu_out | grep -Fq "Destinations: $FAKE/Library/CloudStorage/CloudRoot"; then
+  ok "99 out of range: re-asks, then 2 picks CloudRoot (temp build announced)"
 else
   bad "out-of-range" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
 fi
@@ -547,18 +557,66 @@ fi
 chmod 755 "$FAKE"
 rm -rf "$FAKE"
 
-# 33. END-TO-END: a SPACE-NAMED cloud root selected through the pty menu — the review
-#     flagged the space pin as listing-only; here the path travels menu -> DESTS -> archive
+# 33. END-TO-END (0.3.0): a SPACE-NAMED cloud root selected ALONE — a cloud-only
+#     pick builds in a temp dir, copies sha256-verified into the cloud root,
+#     removes the temp dir, and leaves the default local dir without an archive
 FAKE=$(mktemp -d)
 mkdir -p "$FAKE/Library/CloudStorage/GoogleDrive-1 My Drive"
 run_menu_real "$FAKE" "2"
+CLOUD="$FAKE/Library/CloudStorage/GoogleDrive-1 My Drive"
 if [ "$RC" -eq 0 ] \
-   && [ -n "$(find "$FAKE/Library/CloudStorage/GoogleDrive-1 My Drive" -name 'claude-migration-*.tar.gz')" ] \
-   && menu_out | grep -Fq "DONE. Archive: $FAKE/Library/CloudStorage/GoogleDrive-1 My Drive/claude-migration-"; then
-  ok "space-named root: selected through the menu, archive lands there"
+   && [ -n "$(find "$CLOUD" -name 'claude-migration-*.tar.gz')" ] \
+   && [ -z "$(find "$FAKE/claude-migration" -name 'claude-migration-*.tar.gz' 2>/dev/null)" ] \
+   && [ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'mcm-build.*' 2>/dev/null)" ] \
+   && menu_out | grep -Fq "DONE. Archive: $CLOUD/claude-migration-" \
+   && menu_out | grep -q 'sha256 verified' \
+   && menu_out | grep -q 'temp build dir'; then
+  ok "space-named cloud root, cloud-only: verified copy there, temp removed, default untouched"
 else
-  bad "space-named root e2e" "rc=$RC got: $(menu_out | tail -4 | tr '\n' '|')"
+  bad "cloud-only e2e" "rc=$RC got: $(menu_out | tail -5 | tr '\n' '|')"
 fi
+rm -rf "$FAKE"
+
+# 35. "a" real run: EVERY chosen cloud dir gets a sha256-verified copy (sequential,
+#     never simultaneous), the default local dir is NOT written, temp removed
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/CloudA" "$FAKE/Dropbox"
+run_menu_real "$FAKE" "a"
+A="$FAKE/Library/CloudStorage/CloudA"; B="$FAKE/Dropbox"
+sa=""; for f in "$A"/claude-migration-*.tar.gz; do [ -f "$f" ] && sa="$(shasum -a 256 -- "$f" | awk '{print $1}')"; done
+sb=""; for f in "$B"/claude-migration-*.tar.gz; do [ -f "$f" ] && sb="$(shasum -a 256 -- "$f" | awk '{print $1}')"; done
+if [ "$RC" -eq 0 ] && [ -n "$sa" ] && [ "$sa" = "$sb" ] \
+   && [ -z "$(find "$FAKE/claude-migration" -name 'claude-migration-*.tar.gz' 2>/dev/null)" ] \
+   && [ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'mcm-build.*' 2>/dev/null)" ] \
+   && [ "$(menu_out | grep -c 'sha256 verified')" -ge 2 ]; then
+  ok "a real run: verified copies in every cloud dir, default untouched, temp removed"
+else
+  bad "a real run" "rc=$RC sa=${sa:0:8} sb=${sb:0:8} got: $(menu_out | grep -iE 'copied|temp|DONE' | tr '\n' '|')"
+fi
+rm -rf "$FAKE"
+
+# 36. cloud-only pick with an UNWRITABLE cloud dir: no verified copy -> the temp
+#     build dir is KEPT with a loud warning (never lose the only copy), rc 0
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/Library/CloudStorage/Locked"; chmod 000 "$FAKE/Library/CloudStorage/Locked"
+run_menu_real "$FAKE" "2"
+tmps="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'mcm-build.*' 2>/dev/null)"
+arch_in_tmp=""
+while IFS= read -r t; do
+  [ -n "$t" ] || continue
+  [ -n "$(find "$t" -name 'claude-migration-*.tar.gz' 2>/dev/null)" ] && arch_in_tmp=yes
+done <<< "$tmps"
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -q 'could not copy to' \
+   && menu_out | grep -q 'no cloud copy verified' \
+   && [ -n "$tmps" ] \
+   && [ "$arch_in_tmp" = "yes" ]; then
+  ok "cloud-only, unwritable cloud: temp kept + warned, rc 0 (archive not lost)"
+else
+  bad "cloud-only unwritable" "rc=$RC tmps=$tmps got: $(menu_out | tail -5 | tr '\n' '|')"
+fi
+chmod 755 "$FAKE/Library/CloudStorage/Locked"
+while IFS= read -r t; do [ -n "$t" ] && rm -rf -- "$t"; done <<< "$tmps"
 rm -rf "$FAKE"
 
 # 34. a 20-digit token must RE-ASK: bash `[` errors (rc 2) on the overflow, the old

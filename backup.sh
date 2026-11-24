@@ -29,9 +29,11 @@
 #   The source user/home are recorded in meta.env so restore.sh
 #   can rewrite absolute-path symlinks on a machine with a different username.
 #
-# Usage: bash backup.sh            # interactive on a terminal: destination menu,
-#                                  # archive built in the primary, copied to the rest;
-#                                  # piped/scripted: writes into ~/claude-migration
+# Usage: bash backup.sh            # interactive on a terminal: destination menu — a
+#                                  # local pick builds the archive there (kept); a cloud-only
+#                                  # pick builds once in a temp dir, copies sha256-verified to
+#                                  # each cloud dir, temp auto-removed after the first verified
+#                                  # copy; piped/scripted: writes into ~/claude-migration
 #        bash backup.sh /some/dir  # writes into /some/dir (menu stays shut)
 #        bash backup.sh --list-destinations
 #                                  # print candidate destinations (path<TAB>label), exit
@@ -117,11 +119,23 @@ _candidate_destinations() {
 
 # --- interactive destination menu ----------------------------------------------
 # Opens only when there is no positional OUT and both streams are terminals; piped,
-# scripted, hook and explicit-arg runs take exactly the old path. The archive is always
-# BUILT in the primary (first picked) destination; Task 3 copies it to the rest.
-# Grammar: Enter/d = default; "1 3" or "1,3" = several (first = primary); a = every
-# listed candidate (default included — it is entry 1); c = custom directory (a missing
-# one needs a [y/N] confirm; --dry-run only announces it); q or EOF = abort, exit 1.
+# scripted, hook and explicit-arg runs take exactly the old path. The archive is
+# BUILT in the primary (first picked) destination; the rest get copies.
+# Grammar: Enter/d = default; "1 3" or "1,3" = several (first = primary); a = all
+# detected CLOUD directories (entries 2..n — the local default is entry 1 and is not
+# cloud; with no cloud dirs detected 'a' collapses to the default); c = custom
+# directory (a missing one needs a [y/N] confirm; --dry-run only announces it);
+# q or EOF = abort, exit 1 (this menu is the pre-commitment screen — q stays HERE only).
+# 0.3.0 cloud semantics: when the pick contains a cloud dir but NO local dir, the
+# archive is built ONCE in a temp dir, copied sequentially + sha256-verified to each
+# chosen cloud dir, and the temp dir is auto-removed after the first verified copy.
+_is_cloud_dest() {  # rc 0 when <path> is a detected cloud-sync directory
+  case "$1" in
+    "$HOME/Library/CloudStorage/"*|"$HOME/Library/Mobile Documents/"*|"$HOME/Dropbox"|"$HOME/Dropbox/"*|"$HOME/OneDrive"|"$HOME/OneDrive/"*)
+      return 0 ;;
+  esac
+  return 1
+}
 # bash-3.2 pure: indexed arrays only, no ${var,,}, expansions quoted except where
 # tokenizing is the point (the answer line after comma->space normalization).
 _choose_destinations() {  # _choose_destinations <default-out> — prints DESTS, primary first; abort exits 1
@@ -151,7 +165,7 @@ _choose_destinations() {  # _choose_destinations <default-out> — prints DESTS,
       i=$((i + 1))
     done
     printf '\n' >&2
-    printf '  Enter = default only    numbers = pick several (e.g. 1 3 or 1,3)    a = all detected\n' >&2
+    printf '  Enter = default only    numbers = pick several (e.g. 1 3 or 1,3)    a = all detected cloud directories\n' >&2
     printf '  c = custom directory    q = abort the backup\n\n' >&2
     read -r ans || ans="q"          # EOF at the prompt aborts like q — never spin on a closed pipe
     ans="${ans//[,,]/ }"            # comma form of the number grammar
@@ -159,8 +173,12 @@ _choose_destinations() {  # _choose_destinations <default-out> — prints DESTS,
       ""|d|D) picked="1"; break ;;
       q|Q) warn "backup aborted — nothing was written" >&2; exit 1 ;;
       a|A)
-        i=1; picked=""
-        while [ "$i" -le "$n" ]; do picked="$picked${picked:+$'\n'}$i"; i=$((i + 1)); done
+        if [ "$n" -gt 1 ]; then
+          i=2; picked=""   # entries 2..n are the detected CLOUD dirs; entry 1 (local default) is not
+          while [ "$i" -le "$n" ]; do picked="$picked${picked:+$'\n'}$i"; i=$((i + 1)); done
+        else
+          picked="1"       # no cloud dirs detected: 'a' collapses to the default
+        fi
         break ;;
       c|C)
         printf '  custom directory: ' >&2
@@ -435,8 +453,20 @@ _merge_repos() {  # stdin: state<TAB>payload lines (from _read_repo_list); args:
 # --- prompts, menus, prefs (0.2.0) ----------------------------------------------
 # Remembered settings live in ~/.claude-migration-prefs as key=value lines
 # (starting with repo_mode=review|auto). All menu chrome goes to STDERR; only
-# results travel on stdout (the _choose_destinations convention). EOF at any
-# prompt aborts like q — never spin on a closed pipe.
+# results travel on stdout (the _choose_destinations convention). Post-destination
+# prompts (0.3.0) offer NO abort: EOF/Enter takes the default answer — never spin
+# on a closed pipe. Only the destination menu itself (and the front door) abort on q/EOF.
+_read_ans() {  # _read_ans <var> — read one line into <var>. On EOF set <var>="" AND
+               # point stdin at /dev/null for the REST of this shell: a pty delivers
+               # EOF only once, so without this the NEXT read blocks forever on a
+               # closed pipe (measured 2026-11-24: hung at the second prompt).
+  local _v="$1"
+  # shellcheck disable=SC2229  # intentional: read into the variable NAMED by $_v
+  if read -r "$_v"; then return 0; fi
+  exec 0</dev/null
+  printf -v "$_v" '%s' ''
+  return 0   # EOF-is-default is not an error; rc 1 here would kill the script under set -e
+}
 
 _read_pref() {  # _read_pref <key> — print the value of the last key= line; rc 1 when absent
   local key="$1" line k v f
@@ -483,79 +513,108 @@ _write_pref() {  # _write_pref <key> <value> — atomic; empty value deletes the
   return 0
 }
 
-_repo_size() {  # _repo_size <abs-dir> — human size of tracked+untracked files (gitignore-respected)
-  git -C "$1" ls-files -z -c -o --exclude-standard 2>/dev/null \
-    | xargs -0 stat -f %z 2>/dev/null \
-    | awk '{s+=$1} END {printf "%.1f MB", s / 1048576}'
+_repo_size() {  # _repo_size <abs-dir> — human size of tracked+untracked files (gitignore-respected).
+                 # Paths are made absolute so stat works from any cwd (a bare relative
+                 # path made the pipeline rc 1 under pipefail — invisible while this ran
+                 # inside a $() where set -e is suppressed, fatal in the main shell).
+                 # Always rc 0: callers assign the result under set -e.
+  local _s=""
+  _s="$(git -C "$1" ls-files -z -c -o --exclude-standard 2>/dev/null \
+        | xargs -0 -I{} stat -f %z "$1/{}" 2>/dev/null \
+        | awk '{s+=$1} END {printf "%.1f MB", s / 1048576}')" || true
+  printf '%s\n' "$_s"
+  return 0
 }
 
-_ask_repo_mode() {  # prints "review" or "auto" on stdout; chrome stderr; sets _WRITE_MODE; abort exits 1
+_ask_repo_mode() {  # sets _MODE_ANS=review|auto. Post-destination prompt (0.3.0):
+                    # NO abort offered; EOF/Enter = default (review). Runs in the MAIN
+                    # shell (not $()) so its EOF redirect covers every later prompt.
   local ans ans2
   while true; do
     printf '\n📦 How should I record the repos I found?\n' >&2
     printf '   1) review — show the new repos first (Enter)\n' >&2
     printf '   2) automatic — record repos with a remote without asking\n' >&2
-    read -r ans || ans="q"
+    _read_ans ans
     case "$ans" in
       ""|1) ans="review" ;;
       2) ans="auto" ;;
-      q|Q) warn "backup aborted — nothing was written" >&2; exit 1 ;;
       *) printf '  Unrecognized: %s\n' "$ans" >&2; continue ;;
     esac
     printf 'Remember this choice for future runs? [y/N] ' >&2
-    read -r ans2 || ans2="q"
+    _read_ans ans2
     case "$ans2" in
-      y|Y|yes|YES)
-        # The caller captures this function's stdout via $() — a subshell — so
-        # the pref write happens HERE (a side effect survives the subshell).
-        _write_pref repo_mode "$ans"
-        ;;
-      q|Q) warn "backup aborted — nothing was written" >&2; exit 1 ;;
+      y|Y|yes|YES) _write_pref repo_mode "$ans" ;;
       *) : ;;
     esac
-    printf '%s\n' "$ans"
+    _MODE_ANS="$ans"
     return 0
   done
 }
 
-_startup_menu() {  # sets _MENU_ANS: ""=carry on | change | rescan; q/EOF aborts (exit 1)
+_startup_menu() {  # sets _MENU_ANS: ""=carry on | change | rescan.
+                    # Post-destination prompt (0.3.0): NO abort offered; EOF/Enter = carry on.
   local ans
   while true; do
     printf '\n📦 Remembered choices found (repo mode / list answers)\n' >&2
     printf '   1) carry on with them (Enter)\n' >&2
     printf '   2) change them (re-ask the mode; re-decide excluded and copied repos)\n' >&2
-    printf '   3) re-scan from scratch (ignore the list file this run, then rewrite it)\n' >&2
-    printf '   q) abort the backup\n\n' >&2
-    read -r ans || ans="q"
+    printf '   3) re-scan from scratch (ignore the list file this run, then rewrite it)\n\n' >&2
+    _read_ans ans
     case "$ans" in
       ""|1) _MENU_ANS=""; return 0 ;;
       2|c)  _MENU_ANS="change"; return 0 ;;
       3|r)  _MENU_ANS="rescan"; return 0 ;;
-      q|Q)  warn "backup aborted — nothing was written" >&2; exit 1 ;;
       *)    printf '  Unrecognized: %s\n' "$ans" >&2 ;;
     esac
   done
 }
 
-_ask_no_remote() {  # _ask_no_remote <rel> — prints "copy" or "skip" on stdout; chrome stderr; abort exits 1
+_ask_no_remote() {  # _ask_no_remote <rel> — sets _NR_ANS=copy|skip. Post-destination
+                     # prompt (0.3.0): NO abort offered; EOF/Enter = default (copy).
   local rel="$1" ans sz
   sz="$(_repo_size "$SRC/$rel")"
   while true; do
     printf "\n📦 Repo '%s' has no remote (size without gitignored files: %s)\n" "$rel" "$sz" >&2
     printf '   1) copy the whole tree into the archive (incl. .git history)\n' >&2
-    printf '   2) leave it out\n' >&2
-    printf '   q) abort the backup\n\n' >&2
-    read -r ans || ans="q"
+    printf '   2) leave it out\n\n' >&2
+    _read_ans ans
     case "$ans" in
-      ""|1) printf 'copy\n'; return 0 ;;
-      2)    printf 'skip\n'; return 0 ;;
-      q|Q)  warn "backup aborted — nothing was written" >&2; exit 1 ;;
+      ""|1) _NR_ANS="copy"; return 0 ;;
+      2)    _NR_ANS="skip"; return 0 ;;
       *)    printf '  Unrecognized: %s\n' "$ans" >&2 ;;
     esac
   done
 }
 
-_review_new_repos() {  # _review_new_repos <rel>... — sets ACCEPTED[] (pre-ticked; toggle by number; a/n/Enter); abort exits 1
+_ask_no_remote_batch() {  # _ask_no_remote_batch <rel>... — sets _NRB_ANS=all|none|each.
+                           # One batch menu for ALL no-remote repos (new + parked `?`).
+                           # Post-destination prompt (0.3.0): NO abort offered; EOF/Enter = default (all).
+  local -a paths=()
+  local i ans sz
+  for i in "$@"; do paths+=("$i"); done
+  while true; do
+    printf '\n📦 %d repo(s) have no remote (not re-clonable from anywhere):\n' "${#paths[@]}" >&2
+    i=0
+    while [ "$i" -lt "${#paths[@]}" ]; do
+      sz="$(_repo_size "$SRC/${paths[$i]}")"
+      printf '   %d) %s  (%s without gitignored files)\n' "$((i + 1))" "${paths[$i]}" "$sz" >&2
+      i=$((i + 1))
+    done
+    printf '   1) copy ALL of them into the archive (incl. .git history)  (Enter)\n' >&2
+    printf '   2) leave ALL of them out\n' >&2
+    printf '   3) decide one by one\n\n' >&2
+    _read_ans ans
+    case "$ans" in
+      ""|1) _NRB_ANS="all"; return 0 ;;
+      2)    _NRB_ANS="none"; return 0 ;;
+      3)    _NRB_ANS="each"; return 0 ;;
+      *)    printf '  Unrecognized: %s\n' "$ans" >&2 ;;
+    esac
+  done
+}
+
+_review_new_repos() {  # _review_new_repos <rel>... — sets ACCEPTED[] (pre-ticked; toggle by number; a/n/Enter).
+                         # Post-destination prompt (0.3.0): NO abort offered; EOF/Enter = accept.
   local -a paths=() ticked=()
   local i ans tok okn
   for i in "$@"; do paths+=("$i"); ticked+=("1"); done
@@ -570,13 +629,12 @@ _review_new_repos() {  # _review_new_repos <rel>... — sets ACCEPTED[] (pre-tic
       fi
       i=$((i + 1))
     done
-    printf '   a = tick all   n = tick none   Enter = accept   q = abort\n\n' >&2
-    read -r ans || ans="q"
+    printf '   a = tick all   n = tick none   Enter = accept\n\n' >&2
+    _read_ans ans
     case "$ans" in
       "") break ;;
       a|A) i=0; while [ "$i" -lt "${#ticked[@]}" ]; do ticked[$i]=1; i=$((i + 1)); done ;;
       n|N) i=0; while [ "$i" -lt "${#ticked[@]}" ]; do ticked[$i]=0; i=$((i + 1)); done ;;
-      q|Q) warn "backup aborted — nothing was written" >&2; exit 1 ;;
       *)
         okn=1
         set -f
@@ -656,9 +714,28 @@ warn(){ printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
 # chosen set for Task 3's copies. Everything else (pipe, script, hook, explicit arg)
 # takes exactly the pre-menu path.
 DESTS="$OUT"
+TEMP_BUILD=0
 if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
   DESTS="$(_choose_destinations "$OUT")" || exit 1
   OUT="${DESTS%%$'\n'*}"
+  # 0.3.0 cloud semantics: a pick containing a CLOUD dir but NO local dir (the
+  # default entry 1 or a custom path) builds the archive ONCE in a temp dir; each
+  # chosen cloud dir then gets a sequential sha256-verified copy and the temp dir
+  # is auto-removed after the first verified copy (kept + warned when none
+  # verifies). A local pick is always kept — built in when it is the primary.
+  _local_pick=""; _cloud_pick=0
+  while IFS= read -r _d; do
+    [ -z "$_d" ] && continue
+    if _is_cloud_dest "$_d"; then _cloud_pick=1; else _local_pick="$_d"; fi
+  done <<< "$DESTS"
+  if [ "$_cloud_pick" -eq 1 ] && [ -z "$_local_pick" ]; then
+    TEMP_BUILD=1
+    if [ "$DRY_RUN" -eq 1 ]; then
+      OUT="(temp dir)"          # display only — a dry run writes nothing
+    else
+      OUT="$(mktemp -d "${TMPDIR:-/tmp}/mcm-build.XXXXXX")" || exit 1
+    fi
+  fi
   STAGE="$OUT/stage-$STAMP"
   HOMEDIR="$STAGE/home"
   ARCHIVE="$OUT/claude-migration-$STAMP.tar.gz"
@@ -666,9 +743,15 @@ if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
   _first=1
   while IFS= read -r _d; do
     [ -z "$_d" ] && continue
-    if [ "$_first" -eq 1 ]; then printf '%s (primary)' "$_d"; _first=0; else printf ', %s' "$_d"; fi
+    if [ "$_first" -eq 1 ]; then
+      if [ "$TEMP_BUILD" -eq 1 ]; then printf '%s' "$_d"; else printf '%s (primary)' "$_d"; fi
+      _first=0
+    else printf ', %s' "$_d"; fi
   done <<< "$DESTS"
   printf '\n'
+  if [ "$TEMP_BUILD" -eq 1 ]; then
+    printf '   (cloud-only selection: archive built once in a temp dir, copied sha256-verified to each cloud dir, temp auto-removed after the first verified copy)\n'
+  fi
 fi
 
 # Per-machine configuration, parsed BEFORE the dry-run exit so --dry-run shows the
@@ -756,10 +839,10 @@ else
   if [ "${#NEW_REMOTE[@]}" -gt 0 ]; then
     if [ "$_mode_valid" -eq 0 ]; then
       if [ "$_terminal" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
-        # _ask_repo_mode writes the pref itself when the user answers y — its
-        # stdout is captured here, and an assignment inside $() would not
-        # survive the subshell.
-        _mode="$(_ask_repo_mode)"
+        # _ask_repo_mode runs in the main shell (0.3.0): it writes the pref
+        # itself on y AND its EOF redirect covers every later prompt.
+        _ask_repo_mode
+        _mode="$_MODE_ANS"
         _mode_valid=1
       else
         _mode="auto"     # non-terminal / dry-run: interim automatic, no prompts
@@ -791,12 +874,30 @@ else
       done
     fi
   fi
-  # New repos WITHOUT a remote: per-repo menu on a terminal; `?` when non-terminal.
-  if [ "${#NEW_NOREMOTE[@]}" -gt 0 ]; then
+  # No-remote repos — new ones AND parked `?` ones — get ONE batch menu on a
+  # terminal (0.3.0): copy all / leave out all / decide one by one. Per-repo
+  # answers land in the list file exactly as before, so the startup menu stays
+  # the reuse-or-change point. Non-terminal / dry-run: new ones park as `?`.
+  _nr_all=()
+  for _r in ${NEW_NOREMOTE[@]+"${NEW_NOREMOTE[@]}"}; do _nr_all+=("$_r"); done
+  if [ "$_terminal" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+    for _r in ${DECIDED_UNDECIDED[@]+"${DECIDED_UNDECIDED[@]}"}; do _nr_all+=("$_r"); done
+  fi
+  if [ "${#_nr_all[@]}" -gt 0 ]; then
     if [ "$_terminal" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
-      for _r in ${NEW_NOREMOTE[@]+"${NEW_NOREMOTE[@]}"}; do
-        _ans="$(_ask_no_remote "$_r")" || exit 1
-        if [ "$_ans" = "copy" ]; then
+      _ask_no_remote_batch ${_nr_all[@]+"${_nr_all[@]}"}
+      _nr_ans="$_NRB_ANS"
+      for _r in ${_nr_all[@]+"${_nr_all[@]}"}; do
+        _dec=""
+        case "$_nr_ans" in
+          all)  _dec=copy ;;
+          none) _dec=exclude ;;
+          each) _ask_no_remote "$_r"
+                _ans="$_NR_ANS"
+                if [ "$_ans" = "copy" ]; then _dec=copy; else _dec=exclude; fi ;;
+        esac
+        _merge_drop_line undecided "$_r"   # a parked ? line is replaced by the decision
+        if [ "$_dec" = "copy" ]; then
           COPIES+=("$_r"); MERGE_LINES+=("copy"$'\t'"$_r")
         else
           MERGE_LINES+=("exclude"$'\t'"$_r")
@@ -808,19 +909,6 @@ else
         MERGE_LINES+=("undecided"$'\t'"$_r"); _appended=1
       done
     fi
-  fi
-  # A `?` parked by an earlier non-terminal run is asked on this terminal run.
-  if [ "$_terminal" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ "${#DECIDED_UNDECIDED[@]}" -gt 0 ]; then
-    for _r in ${DECIDED_UNDECIDED[@]+"${DECIDED_UNDECIDED[@]}"}; do
-      _ans="$(_ask_no_remote "$_r")" || exit 1
-      _merge_drop_line undecided "$_r"
-      if [ "$_ans" = "copy" ]; then
-        COPIES+=("$_r"); MERGE_LINES+=("copy"$'\t'"$_r")
-      else
-        MERGE_LINES+=("exclude"$'\t'"$_r")
-      fi
-      _appended=1
-    done
   fi
   # Write the list file only when something changed (idempotent re-runs rewrite
   # nothing) and NEVER on --dry-run (a dry run writes nothing, ever).
@@ -1181,6 +1269,8 @@ chmod 600 "$ARCHIVE"
 # Single-destination runs (piped/scripted/positional-arg) skip all of this and the
 # DONE line stays byte-identical to the pre-menu shape.
 _DEST_SUFFIX=""
+_VERIFIED_CLOUD=0
+_KEPT_ARCHIVE=""
 while IFS= read -r _d; do
   [ -z "$_d" ] && continue
   if [ "$_d" != "$OUT" ]; then
@@ -1189,10 +1279,21 @@ while IFS= read -r _d; do
     # is created by the main flow) — the user picked it, so create it. mkdir is INSIDE
     # the guarded if: under set -euo pipefail a bare failing mkdir would abort the whole
     # script; here an uncreatable target simply lands in the warn branch.
+    # Copies run SEQUENTIALLY and are verified byte-accurate (sha256, not just size).
     if { [ -d "$_d" ] || mkdir -p -- "$_d" 2>/dev/null; } \
-       && cp -p -- "$ARCHIVE" "$_target" 2>/dev/null \
-       && [ "$(stat -f %z "$ARCHIVE" 2>/dev/null)" = "$(stat -f %z "$_target" 2>/dev/null)" ]; then
-      log "copied → $_target"
+       && cp -p -- "$ARCHIVE" "$_target" 2>/dev/null; then
+      _src_sum="$(shasum -a 256 -- "$ARCHIVE" 2>/dev/null | awk '{print $1}')"
+      _dst_sum="$(shasum -a 256 -- "$_target" 2>/dev/null | awk '{print $1}')"
+      if [ -n "$_src_sum" ] && [ "$_src_sum" = "$_dst_sum" ]; then
+        log "copied → $_target (sha256 verified)"
+        if _is_cloud_dest "$_d"; then
+          _VERIFIED_CLOUD=$((_VERIFIED_CLOUD + 1))
+          [ -z "$_KEPT_ARCHIVE" ] && _KEPT_ARCHIVE="$_target"
+        fi
+      else
+        warn "copy to $_d is NOT byte-accurate (sha256 mismatch) — removed, skipped"
+        rm -f -- "$_target" 2>/dev/null || true
+      fi
     else
       warn "could not copy to $_d (skipped) — the primary archive is intact"
     fi
@@ -1207,6 +1308,19 @@ if [ "$(printf '%s\n' "$DESTS" | grep -c .)" -gt 1 ]; then
   done <<< "$DESTS"
 fi
 rm -rf "$STAGE"
+
+# 0.3.0: a temp build dir exists only when a cloud-only pick was made; it is
+# removed ONLY after at least one cloud copy verified byte-accurate. The rm
+# target is exclusively the mktemp dir captured in $OUT above — never a picked path.
+if [ "$TEMP_BUILD" -eq 1 ]; then
+  if [ "$_VERIFIED_CLOUD" -gt 0 ]; then
+    rm -rf -- "$OUT"
+    log "temp build dir removed — a byte-accurate (sha256) copy is verified in the cloud"
+    ARCHIVE="$_KEPT_ARCHIVE"
+  else
+    warn "no cloud copy verified — the temp build dir is KEPT: $OUT (archive: $ARCHIVE)"
+  fi
+fi
 
 SIZE="$(du -sh "$ARCHIVE" | cut -f1)"
 echo

@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.3.0] — 2026-11-24
+
+### Fixed — a backup no longer dies on files that vanish mid-run (live machines)
+
+- rsync exit 23 (`open (2) … No such file or directory`) and tar `Cannot stat`
+  each aborted the WHOLE run under `set -e` when a live session rewrote
+  `~/.claude`, rotated a `waypoints-backups` snapshot away, or edited a repo
+  while the multi-minute backup ran (both reproduced 2026-11-23). New
+  `_rsync_tolerant` / `_tar_tolerant` wrappers classify errors: vanished files
+  are warned and skipped; ANY other error stays fatal. Pinned by
+  `tests/test_race.sh` — both races reproduced RED (rc 23 / rc 1), permission
+  errors still abort, missing listed repos stay warn-only.
+
+### Added — menu UX (user requests 2026-11-23)
+
+- No-remote repos get ONE batch menu — `1) copy ALL of them  2) leave ALL of
+  them out  3) decide one by one` — covering new and parked `?` repos together,
+  instead of one prompt per repo. Per-repo answers still land in
+  `~/.claude-migration-repos`; the startup menu stays the reuse-or-change point.
+- No `q) abort` on any prompt after the destination is chosen (house grammar:
+  q on top-level screens only — the destination menu and the front door keep
+  it). EOF at those prompts takes the default answer; `_read_ans` redirects
+  stdin to /dev/null on the first EOF so no later read blocks on a closed pipe.
+- Destination menu: `a` is now honestly `all detected cloud directories`
+  (entries 2..n — the local default is entry 1 and is not cloud). A cloud-only
+  pick builds the archive ONCE in a temp dir, copies it sequentially and
+  sha256-verified (byte-accurate) to each chosen cloud dir, and auto-removes the
+  temp dir after the first verified copy (kept + warned when none verifies).
+  The local default dir is kept only when explicitly picked (entry 1 or custom).
+
 ## [0.2.1] — 2026-11-11
 
 ### Added — `mac-claude-migration` front-door command

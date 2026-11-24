@@ -37,11 +37,15 @@ On a terminal, a bare `backup.sh` opens a destination selector (modelled on the
 iphone-backup tool): it detects the common cloud-provider roots
 (`~/Library/CloudStorage/*`, plus legacy `~/Dropbox`/`~/OneDrive` and iCloud Drive),
 shows the default output directory first with its path, and lets you pick **several
-destinations at once** (`1 3` or `1,3`; `a` = all listed; `Enter` = default only) or a
-custom directory (`c`, with a confirm before any `mkdir`). The archive is always built
-in the primary (first picked) destination and then copied — size-verified — to each
-additional one; a failed copy warns and never fails the backup. Piped, scripted, cron
-and explicit-directory runs never open the menu and behave exactly as before.
+destinations at once** (`1 3` or `1,3`; `a` = all detected *cloud* directories;
+`Enter` = default only) or a custom directory (`c`, with a confirm before any
+`mkdir`). The archive is built in the primary (first picked) destination and copied —
+sha256-verified, byte-accurate — to each additional one; a failed copy warns and never
+fails the backup. If the pick contains **only cloud directories**, the archive is built
+once in a temp dir, copied to each cloud dir, and the temp dir is auto-removed after
+the first verified copy — the local default is kept only when you explicitly pick it.
+No prompt after the destination is chosen offers an abort. Piped, scripted, cron and
+explicit-directory runs never open the menu and behave exactly as before.
 
 ## What it captures, and what it deliberately does not
 
@@ -98,9 +102,10 @@ or put one path per line in `~/.claude-migration-extra-files` (`#` comments ok).
 caches, `node_modules`/`.venv`, the output dir, or anything the archive already
 captures), finds every repo (including linked worktrees), and merges them into
 `~/.claude-migration-repos`. On a terminal it asks only what it cannot decide
-alone — the mode (review vs automatic), and what to do with no-remote repos — and
-remembers each answer. On scripts/pipes it never prompts: no-remote repos are
-parked as `?` lines and asked on the next terminal run.
+alone — the mode (review vs automatic), and ONE batch question for all no-remote
+repos (copy all / leave out all / decide one by one) — and remembers each answer.
+On scripts/pipes it never prompts: no-remote repos are parked as `?` lines and
+join the batch menu on the next terminal run.
 
 The list file stays hand-editable, one path per line (`#` comments ok):
 

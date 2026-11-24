@@ -142,29 +142,36 @@ else
   bad "startup menu re-scan" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi
 
-# 7. startup menu q aborts with rc 1 and writes nothing
+# 7. startup menu is a POST-destination prompt (0.3.0): no q abort is offered —
+#    q is unrecognized and re-asks; Enter then carries on; run completes rc 0
 fresh
 mkrepo "$FAKE/r1" "https://example.com/r1.git"
 printf 'repo_mode=auto\n' > "$PREFS"
-RC=0; run_pty "$FAKE" "$OUT" "q" || RC=$?
-if [ "$RC" -eq 1 ] && [ ! -e "$LIST" ]; then
-  ok "startup menu q: abort rc 1, no list file written"
+RC=0; run_pty "$FAKE" "$OUT" "q" "" || RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -q 'Remembered choices' \
+   && menu_out | grep -Fq 'Unrecognized: q' \
+   && ! menu_out | grep -Fq 'q) abort' \
+   && ! menu_out | grep -q 'aborted' \
+   && grep -Fqx 'r1' "$LIST"; then
+  ok "startup menu: no q offered; q re-asks, Enter carries on, rc 0, list written"
 else
-  bad "startup menu abort" "RC=$RC list=$([ -e "$LIST" ] && echo yes)"
+  bad "startup menu no-q" "RC=$RC out=$(menu_out | tail -6 | tr '\n' '|') list=$([ -e "$LIST" ] && tr '\n' '|' < "$LIST")"
 fi
 
-# 8. per-repo no-remote menu: shows name + size; 1 = copy (whole tree)
+# 8. no-remote repo(s) go through the batch menu (0.3.0): name + size shown; 1 = copy all
 fresh
 mkrepo "$FAKE/local"
 printf 'hello\n' > "$FAKE/local/README"
 RC=0; run_pty "$FAKE" "$OUT" "1" || RC=$?
 if [ "$RC" -eq 0 ] \
+   && menu_out | grep -q 'have no remote' \
    && menu_out | grep -q 'local' \
-   && menu_out | grep -qi 'size' \
+   && menu_out | grep -qi 'without gitignored files' \
    && grep -Fqx '+local' "$LIST"; then
-  ok "per-repo menu: name + size shown, 1=copy writes + line"
+  ok "batch menu (single repo): name + size shown, 1=copy writes + line"
 else
-  bad "per-repo copy" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null) out=$(menu_out | tail -6 | tr '\n' '|')"
+  bad "batch single copy" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null) out=$(menu_out | tail -6 | tr '\n' '|')"
 fi
 
 # 9. per-repo menu 2 = leave out (!)
@@ -298,15 +305,22 @@ else
   bad "malformed prefs" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi
 
-# 16. EOF at the mode prompt aborts like q (closed stdin mid-prompt, rc 1)
+# 16. EOF at a POST-destination prompt takes the DEFAULT, never aborts (0.3.0):
+#     closed stdin mid-run -> mode prompt defaults to review, review list
+#     accepts, run completes rc 0
 fresh
 mkrepo "$FAKE/r1" "https://example.com/r1.git"
 { sleep 1; } | env -u MIGRATION_REPOS HOME="$FAKE" PATH="$STUB:$SAVED_PATH" \
     script -q /dev/null /bin/bash "$ROOT/backup.sh" "$OUT" >"$PTYOUT" 2>&1
-if menu_out | grep -qi 'aborted'; then
-  ok "EOF at a prompt aborts like q (aborted message)"
+RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -q 'How should I record' \
+   && menu_out | grep -q 'New repos with a remote' \
+   && ! menu_out | grep -qi 'aborted' \
+   && grep -Fqx 'r1' "$LIST"; then
+  ok "EOF at mode prompt: default (review) taken, review accepts, rc 0, no abort"
 else
-  bad "EOF abort" "out=$(menu_out | tail -4 | tr '\n' '|')"
+  bad "EOF default" "RC=$RC out=$(menu_out | tail -4 | tr '\n' '|') list=$([ -e "$LIST" ] && tr '\n' '|' < "$LIST")"
 fi
 
 # 17. pty --dry-run with remembered review mode + a new remote repo: NEVER prompts
@@ -345,6 +359,75 @@ if [ "$RC" -eq 0 ] \
   ok "startup menu change: mode re-asked AND excluded repo re-offered (bare, ! gone)"
 else
   bad "change re-decides" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
+fi
+
+# 19. batch no-remote menu (0.3.0): ONE menu for all no-remote repos; 1 copies all
+fresh
+mkrepo "$FAKE/local1"; printf 'a\n' > "$FAKE/local1/README"
+mkrepo "$FAKE/local2"; printf 'b\n' > "$FAKE/local2/README"
+RC=0; run_pty "$FAKE" "$OUT" "1" || RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -q 'have no remote' \
+   && menu_out | grep -q 'local1' && menu_out | grep -q 'local2' \
+   && menu_out | grep -q 'copy ALL' \
+   && [ "$(menu_out | grep -c 'has no remote (size')" -eq 0 ] \
+   && grep -Fqx '+local1' "$LIST" && grep -Fqx '+local2' "$LIST"; then
+  ok "batch menu: one menu lists all no-remote repos, 1 = copy all (+ lines), no per-repo menu"
+else
+  bad "batch copy-all" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null) out=$(menu_out | tail -10 | tr '\n' '|')"
+fi
+
+# 20. batch menu 2 = leave out all
+fresh
+mkrepo "$FAKE/local1"; mkrepo "$FAKE/local2"
+RC=0; run_pty "$FAKE" "$OUT" "2" || RC=$?
+if [ "$RC" -eq 0 ] && grep -Fqx '!local1' "$LIST" && grep -Fqx '!local2' "$LIST"; then
+  ok "batch menu: 2 = leave out all (! lines)"
+else
+  bad "batch none" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
+fi
+
+# 21. batch menu 3 = decide one by one (per-repo menus, individual answers).
+#     Discovery order is find-order, not alphabetical: assert one + and one !
+#     among the two repos, not which key maps to which name.
+fresh
+mkrepo "$FAKE/local1"; mkrepo "$FAKE/local2"
+RC=0; run_pty "$FAKE" "$OUT" "3" "1" "2" || RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -q 'has no remote (size' \
+   && [ "$(grep -c '^+local' "$LIST" 2>/dev/null)" -eq 1 ] \
+   && [ "$(grep -c '^!local' "$LIST" 2>/dev/null)" -eq 1 ]; then
+  ok "batch menu: 3 = per-repo fallback, one copy + one skip land individually"
+else
+  bad "batch each" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null) out=$(menu_out | tail -8 | tr '\n' '|')"
+fi
+
+# 22. parked `?` repos join the SAME batch menu on a terminal run
+fresh
+mkrepo "$FAKE/parked"; mkrepo "$FAKE/newlocal"
+printf '?parked\n' > "$LIST"
+RC=0; run_pty "$FAKE" "$OUT" "2" || RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -q 'parked' && menu_out | grep -q 'newlocal' \
+   && grep -Fqx '!parked' "$LIST" && grep -Fqx '!newlocal' "$LIST" \
+   && ! grep -Fqx '?parked' "$LIST"; then
+  ok "batch menu covers parked ? repos too (? line replaced by the decision)"
+else
+  bad "batch parked" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
+fi
+
+# 23. no q abort after the destination: q at the batch menu re-asks, then 1 works
+fresh
+mkrepo "$FAKE/local1"
+RC=0; run_pty "$FAKE" "$OUT" "q" "1" || RC=$?
+if [ "$RC" -eq 0 ] \
+   && menu_out | grep -Fq 'Unrecognized: q' \
+   && ! menu_out | grep -Fq 'q) abort' \
+   && ! menu_out | grep -q 'aborted' \
+   && grep -Fqx '+local1' "$LIST"; then
+  ok "batch menu: q not offered; typing q re-asks, then 1 copies, rc 0"
+else
+  bad "batch q" "RC=$RC out=$(menu_out | tail -8 | tr '\n' '|') list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
