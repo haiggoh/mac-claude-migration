@@ -103,9 +103,24 @@ caches, `node_modules`/`.venv`, the output dir, or anything the archive already
 captures), finds every repo (including linked worktrees), and merges them into
 `~/.claude-migration-repos`. On a terminal it asks only what it cannot decide
 alone — the mode (review vs automatic), and ONE batch question for all no-remote
-repos (copy all / leave out all / decide one by one) — and remembers each answer.
+repos (`a` copy all / `n` leave all out / `o` decide one by one, or type repo
+numbers such as `2,7` to copy just those) — and remembers each answer.
 On scripts/pipes it never prompts: no-remote repos are parked as `?` lines and
 join the batch menu on the next terminal run.
+
+**Build output is never archived (0.3.1).** `node_modules`, `.venv`/`venv`,
+`__pycache__`, any directory holding a `CACHEDIR.TAG`, and cargo `target/` dirs
+(recognised by `.rustc_info.json` or a `<profile>/.fingerprint`, so a plain folder
+that is merely *named* `target` is kept) are skipped in every copy leg — they are
+rebuilt on the new Mac. On a terminal run `~/.claude/backups` (session safety
+snapshots) is offered with its size: include it (Enter) or leave it out.
+
+**Progress (0.3.1).** On a terminal every long step draws one live status line
+(spinner + elapsed time; a bar and percentage for packing and for each cloud copy),
+so a big backup never looks wedged. Piped and scripted runs stay plain;
+`MCM_PROGRESS=1` forces the line on, `0` forces it off. Interrupting a run (Ctrl-C,
+closing the window) removes its partial staging copy and unfinished archive —
+including the temp build dir of a cloud-only pick, which holds your secrets.
 
 The list file stays hand-editable, one path per line (`#` comments ok):
 

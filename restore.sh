@@ -31,6 +31,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0;;
     -*) printf '%s: unknown option: %s\n' "${0##*/}" "$1" >&2
+        # shellcheck disable=SC2016  # the backticks are literal text in the hint, not a substitution
         printf 'Try `%s --help`.\n' "${0##*/}" >&2; exit 2;;
     *) ARGS+=("$1"); shift;;
   esac
@@ -39,6 +40,7 @@ set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 if [ $# -ne 1 ]; then
   printf '%s: expected exactly one archive path\n' "${0##*/}" >&2
+  # shellcheck disable=SC2016  # the backticks are literal text in the hint, not a substitution
   printf 'Try `%s --help`.\n' "${0##*/}" >&2
   exit 2
 fi
@@ -81,6 +83,7 @@ log "1/7  Homebrew toolchain"
 ########################################################################
 if ! command -v brew >/dev/null 2>&1; then
   warn "Homebrew not installed. Install it first:"
+  # shellcheck disable=SC2016  # printed verbatim for the user to paste — it must NOT expand here
   echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
   echo "  then re-run this script."
   exit 1
@@ -156,9 +159,11 @@ if [ -f "$STAGE/repos.tsv" ]; then
       log "clone $url → $rel"
       git clone "$url" "$dest"
       if [ -n "$sha" ]; then
-        git -C "$dest" checkout --quiet "$sha" 2>/dev/null \
-          && ok "checked out $sha" \
-          || warn "could not checkout $sha (remote may have diverged) — on $branch HEAD"
+        if git -C "$dest" checkout --quiet "$sha" 2>/dev/null; then
+          ok "checked out $sha"
+        else
+          warn "could not checkout $sha (remote may have diverged) — on $branch HEAD"
+        fi
       fi
     fi
     # re-apply your uncommitted/untracked overlay

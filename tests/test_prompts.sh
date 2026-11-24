@@ -169,17 +169,17 @@ if [ "$RC" -eq 0 ] \
    && menu_out | grep -q 'local' \
    && menu_out | grep -qi 'without gitignored files' \
    && grep -Fqx '+local' "$LIST"; then
-  ok "batch menu (single repo): name + size shown, 1=copy writes + line"
+  ok "batch menu (single repo): name + size shown, 1 = repo #1 copied, writes + line"
 else
   bad "batch single copy" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null) out=$(menu_out | tail -6 | tr '\n' '|')"
 fi
 
-# 9. per-repo menu 2 = leave out (!)
+# 9. batch menu n = leave out (!)
 fresh
 mkrepo "$FAKE/local"
-RC=0; run_pty "$FAKE" "$OUT" "2" || RC=$?
+RC=0; run_pty "$FAKE" "$OUT" "n" || RC=$?
 if [ "$RC" -eq 0 ] && grep -Fqx '!local' "$LIST"; then
-  ok "per-repo menu: 2=leave out writes ! line"
+  ok "batch menu (single repo): n=leave out writes ! line"
 else
   bad "per-repo leave-out" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi
@@ -208,7 +208,7 @@ fi
 fresh
 mkrepo "$FAKE/parked"
 printf '?parked\n' > "$LIST"
-RC=0; run_pty "$FAKE" "$OUT" "2" || RC=$?
+RC=0; run_pty "$FAKE" "$OUT" "n" || RC=$?
 if [ "$RC" -eq 0 ] && grep -Fqx '!parked' "$LIST" && ! grep -Fqx '?parked' "$LIST"; then
   ok "parked ? repo asked on terminal run, answer lands as ! line"
 else
@@ -361,43 +361,43 @@ else
   bad "change re-decides" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi
 
-# 19. batch no-remote menu (0.3.0): ONE menu for all no-remote repos; 1 copies all
+# 19. batch no-remote menu: ONE menu for all no-remote repos; a copies all (0.3.1 letters)
 fresh
 mkrepo "$FAKE/local1"; printf 'a\n' > "$FAKE/local1/README"
 mkrepo "$FAKE/local2"; printf 'b\n' > "$FAKE/local2/README"
-RC=0; run_pty "$FAKE" "$OUT" "1" || RC=$?
+RC=0; run_pty "$FAKE" "$OUT" "a" || RC=$?
 if [ "$RC" -eq 0 ] \
    && menu_out | grep -q 'have no remote' \
    && menu_out | grep -q 'local1' && menu_out | grep -q 'local2' \
    && menu_out | grep -q 'copy ALL' \
    && [ "$(menu_out | grep -c 'has no remote (size')" -eq 0 ] \
    && grep -Fqx '+local1' "$LIST" && grep -Fqx '+local2' "$LIST"; then
-  ok "batch menu: one menu lists all no-remote repos, 1 = copy all (+ lines), no per-repo menu"
+  ok "batch menu: one menu lists all no-remote repos, a = copy all (+ lines), no per-repo menu"
 else
   bad "batch copy-all" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null) out=$(menu_out | tail -10 | tr '\n' '|')"
 fi
 
-# 20. batch menu 2 = leave out all
+# 20. batch menu n = leave out all
 fresh
 mkrepo "$FAKE/local1"; mkrepo "$FAKE/local2"
-RC=0; run_pty "$FAKE" "$OUT" "2" || RC=$?
+RC=0; run_pty "$FAKE" "$OUT" "n" || RC=$?
 if [ "$RC" -eq 0 ] && grep -Fqx '!local1' "$LIST" && grep -Fqx '!local2' "$LIST"; then
-  ok "batch menu: 2 = leave out all (! lines)"
+  ok "batch menu: n = leave out all (! lines)"
 else
   bad "batch none" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi
 
-# 21. batch menu 3 = decide one by one (per-repo menus, individual answers).
+# 21. batch menu o = decide one by one (per-repo menus, individual answers).
 #     Discovery order is find-order, not alphabetical: assert one + and one !
 #     among the two repos, not which key maps to which name.
 fresh
 mkrepo "$FAKE/local1"; mkrepo "$FAKE/local2"
-RC=0; run_pty "$FAKE" "$OUT" "3" "1" "2" || RC=$?
+RC=0; run_pty "$FAKE" "$OUT" "o" "1" "2" || RC=$?
 if [ "$RC" -eq 0 ] \
    && menu_out | grep -q 'has no remote (size' \
    && [ "$(grep -c '^+local' "$LIST" 2>/dev/null)" -eq 1 ] \
    && [ "$(grep -c '^!local' "$LIST" 2>/dev/null)" -eq 1 ]; then
-  ok "batch menu: 3 = per-repo fallback, one copy + one skip land individually"
+  ok "batch menu: o = per-repo fallback, one copy + one skip land individually"
 else
   bad "batch each" "RC=$RC list=$(tr '\n' '|' < "$LIST" 2>/dev/null) out=$(menu_out | tail -8 | tr '\n' '|')"
 fi
@@ -406,7 +406,7 @@ fi
 fresh
 mkrepo "$FAKE/parked"; mkrepo "$FAKE/newlocal"
 printf '?parked\n' > "$LIST"
-RC=0; run_pty "$FAKE" "$OUT" "2" || RC=$?
+RC=0; run_pty "$FAKE" "$OUT" "n" || RC=$?
 if [ "$RC" -eq 0 ] \
    && menu_out | grep -q 'parked' && menu_out | grep -q 'newlocal' \
    && grep -Fqx '!parked' "$LIST" && grep -Fqx '!newlocal' "$LIST" \
@@ -455,15 +455,15 @@ else
   bad "review q" "RC=$RC out=$(menu_out | tail -6 | tr '\n' '|') list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi
 
-# 26. q at a PER-REPO menu (reached via batch choice 3) re-asks; then 1 copies
+# 26. q at a PER-REPO menu (reached via batch choice o) re-asks; then 1 copies
 fresh
 mkrepo "$FAKE/local1"
-RC=0; run_pty "$FAKE" "$OUT" "3" "q" "1" || RC=$?
+RC=0; run_pty "$FAKE" "$OUT" "o" "q" "1" || RC=$?
 if [ "$RC" -eq 0 ] \
    && menu_out | grep -Fq 'Unrecognized: q' \
    && ! menu_out | grep -q 'aborted' \
    && grep -Fqx '+local1' "$LIST"; then
-  ok "per-repo menu (batch 3): q re-asks, no abort, then 1 copies, rc 0"
+  ok "per-repo menu (batch o): q re-asks, no abort, then 1 copies, rc 0"
 else
   bad "per-repo q" "RC=$RC out=$(menu_out | tail -6 | tr '\n' '|') list=$(tr '\n' '|' < "$LIST" 2>/dev/null)"
 fi

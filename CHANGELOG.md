@@ -6,6 +6,46 @@ All notable changes to this project are documented here. The format follows
 is the single source; this file's top entry must agree (pinned by
 `tests/test_portability.sh`).
 
+## [0.3.1] — 2026-11-24
+
+### Fixed — a big backup looked wedged, and an interrupt leaked secrets to $TMPDIR
+
+- **Build output bloat.** A live run staged 64.9 GB, 62.3 GB of it cargo `target/`
+  dirs inside `~/.claude/backups/worktrees/*`, then packed them through one silent
+  gzip for 27+ minutes (it looked wedged; tar was at 97% CPU). Copied without their
+  `CACHEDIR.TAG`, so the tag alone recognised none of them (measured). Now skipped in
+  every copy leg: any `CACHEDIR.TAG` dir, and a `target/` holding `.rustc_info.json`
+  or a `<profile>/.fingerprint`; a plain dir named `target` is kept. The run reports
+  how many build-output dirs it skipped.
+- **Interrupt cleanup.** There was no trap: a Ctrl-C'd cloud-only run left its 65 GB
+  mktemp build dir — a staging copy of every secret — behind. Any non-zero exit after
+  work began now removes the stage, an unfinished archive, a half-copied destination
+  file and the cloud-only temp build dir. The handler removes first and prints last,
+  with errexit off, so it still works when the terminal itself is gone.
+- **Unpushed commits warned once per repository.** `git log --branches` spans every
+  local branch of a repo, shared by all its linked worktrees — one repo with 20
+  worktrees printed the same "52 UNPUSHED" 20 times.
+- **Batch no-remote menu took a repo number as an action** (`2,7` → "Unrecognized").
+
+### Added
+
+- **Live progress** on a terminal (stderr only): spinner + elapsed for every long step
+  (repo scan, `~/.claude` copy, repos `[i/N]`, Homebrew, sha256), a bar + percentage
+  for packing (entries) and for each cloud copy (bytes). Piped runs stay plain;
+  `MCM_PROGRESS=1|0` forces it on/off, any other value exits 2. A one-line summary
+  (`packed N entries → SIZE in TIME`) is always printed.
+- **`~/.claude/backups` prompt** (terminal runs): its size is shown; include it
+  (Enter) or leave it out of this backup. Piped runs include it as before.
+- **Batch menu grammar:** `a` copy all (Enter) / `n` leave all out / `o` one by one;
+  numbers (`2,7` or `2 7`) copy just those repos and leave the rest out.
+
+### Changed
+
+- The archive's sha256 is computed once, not re-read in full for every destination.
+- shellcheck clean on all three scripts (SC2004/SC2321 index arithmetic, SC2015
+  `A && B || C` rewritten as `if`, SC2016 literal-text hints annotated); pinned by
+  `tests/test_hotfix_031.sh`.
+
 ## [0.3.0] — 2026-11-24
 
 ### Fixed — a backup no longer dies on files that vanish mid-run (live machines)
